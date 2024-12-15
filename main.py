@@ -32,6 +32,7 @@ class InstagramTracker:
         self.password = os.getenv('IG_PASSWORD')
         self.target_account = os.getenv('TARGET_ACCOUNT')
         self.driver = None
+        self.cookies_file = 'instagram_cookies.json'
         
     def setup_driver(self):
         chrome_options = Options()
@@ -51,7 +52,13 @@ class InstagramTracker:
     
     def login(self):
         try:
-            print("Logging in to Instagram...")
+            print("Attempting to log in to Instagram...")
+            
+            # First try to use saved cookies
+            if self.load_cookies():
+                return True
+                
+            print("Performing fresh login...")
             self.driver.get('https://www.instagram.com/')
             random_sleep(3, 6)
             
@@ -74,12 +81,13 @@ class InstagramTracker:
             # Wait for login to complete
             random_sleep(5, 8)
             
-            # Check if login was successful by waiting for the Instagram logo or profile icon
             try:
                 WebDriverWait(self.driver, 15).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, 'svg[aria-label="Instagram"]'))
                 )
                 print("Successfully logged in!")
+                # Save cookies after successful login
+                self.save_cookies()
                 return True
             except TimeoutException:
                 print("Failed to verify login success")
@@ -87,6 +95,47 @@ class InstagramTracker:
                 
         except Exception as e:
             print(f"Login failed: {str(e)}")
+            return False
+    
+    def save_cookies(self):
+        """Save the current session cookies to a file"""
+        try:
+            cookies = self.driver.get_cookies()
+            with open(self.cookies_file, 'w') as f:
+                json.dump(cookies, f)
+            print("Session cookies saved successfully")
+        except Exception as e:
+            print(f"Failed to save cookies: {str(e)}")
+
+    def load_cookies(self):
+        """Load and set saved cookies if they exist"""
+        try:
+            if os.path.exists(self.cookies_file):
+                self.driver.get('https://www.instagram.com/')
+                random_sleep(2, 4)
+                
+                with open(self.cookies_file, 'r') as f:
+                    cookies = json.load(f)
+                    for cookie in cookies:
+                        self.driver.add_cookie(cookie)
+                
+                # Refresh page to apply cookies
+                self.driver.refresh()
+                random_sleep(3, 5)
+                
+                # Verify if we're logged in
+                try:
+                    WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, 'svg[aria-label="Instagram"]'))
+                    )
+                    print("Successfully logged in using saved cookies!")
+                    return True
+                except TimeoutException:
+                    print("Saved cookies are invalid or expired")
+                    return False
+            return False
+        except Exception as e:
+            print(f"Error loading cookies: {str(e)}")
             return False
     
     def open_search(self):
