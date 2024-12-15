@@ -89,16 +89,42 @@ class InstagramTracker:
             print(f"Login failed: {str(e)}")
             return False
     
+    def open_search(self):
+        try:
+            print("Opening search...")
+            # Using a more robust selector based on the SVG aria-label and link role
+            search_selector = 'a[role="link"] svg[aria-label="Search"]'
+            
+            # Wait for and click the search link (parent of the SVG)
+            search_element = WebDriverWait(self.driver, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, search_selector))
+            )
+            # Click the parent 'a' element since it's the clickable link
+            search_link = search_element.find_element(By.XPATH, "./ancestor::a[@role='link']")
+            random_sleep(1, 2)
+            search_link.click()
+            
+            # Wait a moment for the search interface to load
+            random_sleep(2, 4)
+            print("Search opened successfully")
+            return True
+            
+        except Exception as e:
+            print(f"Failed to open search: {str(e)}")
+            return False
+    
     def run(self):
         try:
             self.setup_driver()
             self.login()
+            self.open_search()
         except Exception as e:
             print(f"Error in run: {str(e)}")
         finally:
             if self.driver:
                 self.driver.quit()
             self.db.close()
+            print("Script finished")
 
 def main():
     # Schedule the job to run once every 12 hours instead of every day
