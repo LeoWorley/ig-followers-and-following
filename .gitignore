@@ -1,1 +1,8 @@
+# credentials and target user
 .env
+
+# virtual environment
+venv/
+
+# pycache
+__pycache__/
