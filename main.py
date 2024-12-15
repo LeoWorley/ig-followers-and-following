@@ -159,6 +159,44 @@ class InstagramTracker:
             print(f"Error navigating to profile: {str(e)}")
             return False
 
+    def get_followers_info(self):
+        try:
+            print("Getting followers information...")
+            
+            # Wait for the followers link to be present
+            followers_link = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, 'a[href*="/followers/"]'))
+            )
+            
+            # Get the followers count from the span with title attribute
+            followers_count_elem = followers_link.find_element(By.CSS_SELECTOR, 'span[class*="x5n08af"] span')
+            followers_count = int(followers_count_elem.text.replace(',', ''))
+            print(f"Found {followers_count} followers")
+            
+            # Store the followers count in the database
+            timestamp = datetime.now(pytz.UTC)
+            self.db.store_followers_count(self.target_account, followers_count, timestamp)
+            
+            # Click on the followers link to open the list
+            random_sleep(1, 2)
+            followers_link.click()
+            
+            # Wait for the followers modal to appear
+            try:
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="dialog"]'))
+                )
+                print("Followers list opened successfully")
+                random_sleep(2, 3)
+                return followers_count
+            except TimeoutException:
+                print("Failed to open followers list")
+                return None
+                
+        except Exception as e:
+            print(f"Error getting followers info: {str(e)}")
+            return None
+
     def run(self):
         try:
             self.setup_driver()
@@ -167,6 +205,10 @@ class InstagramTracker:
                 return
             if not self.navigate_to_profile():
                 print("Failed to load target profile, aborting...")
+                return
+            followers_count = self.get_followers_info()
+            if followers_count is None:
+                print("Failed to get followers information, aborting...")
                 return
         except Exception as e:
             print(f"Error in run: {str(e)}")
