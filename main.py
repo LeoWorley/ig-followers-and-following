@@ -162,11 +162,57 @@ class InstagramTracker:
             print(f"Failed to open search: {str(e)}")
             return False
     
+    def search_user(self):
+        try:
+            print(f"Searching for user: {self.target_account}")
+            
+            # Wait for and find the search input using its aria-label
+            search_input = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, 'input[aria-label="Search input"]'))
+            )
+            random_sleep(1, 2)
+            
+            # Clear any existing text and type the target account
+            search_input.clear()
+            random_sleep(0.5, 1)
+            
+            # Type like a human
+            for char in self.target_account:
+                search_input.send_keys(char)
+                time.sleep(random.uniform(0.1, 0.3))
+            
+            random_sleep(2, 3)
+            
+            # Wait for and click the first search result
+            result_selector = f'a[href="/{self.target_account}/"]'
+            try:
+                user_link = WebDriverWait(self.driver, 10).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, result_selector))
+                )
+                random_sleep(1, 2)
+                user_link.click()
+                print(f"Successfully navigated to {self.target_account}'s profile")
+                return True
+            except TimeoutException:
+                print(f"Could not find user: {self.target_account}")
+                return False
+                
+        except Exception as e:
+            print(f"Error searching for user: {str(e)}")
+            return False
+
     def run(self):
         try:
             self.setup_driver()
-            self.login()
-            self.open_search()
+            if not self.login():
+                print("Failed to login, aborting...")
+                return
+            if not self.open_search():
+                print("Failed to open search, aborting...")
+                return
+            if not self.search_user():
+                print("Failed to find target user, aborting...")
+                return
         except Exception as e:
             print(f"Error in run: {str(e)}")
         finally:
