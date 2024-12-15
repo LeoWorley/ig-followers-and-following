@@ -138,67 +138,25 @@ class InstagramTracker:
             print(f"Error loading cookies: {str(e)}")
             return False
     
-    def open_search(self):
+    def navigate_to_profile(self):
         try:
-            print("Opening search...")
-            # Using a more robust selector based on the SVG aria-label and link role
-            search_selector = 'a[role="link"] svg[aria-label="Search"]'
+            print(f"Navigating to profile: {self.target_account}")
+            self.driver.get(f'https://www.instagram.com/{self.target_account}/')
             
-            # Wait for and click the search link (parent of the SVG)
-            search_element = WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, search_selector))
-            )
-            # Click the parent 'a' element since it's the clickable link
-            search_link = search_element.find_element(By.XPATH, "./ancestor::a[@role='link']")
-            random_sleep(1, 2)
-            search_link.click()
-            
-            # Wait a moment for the search interface to load
-            random_sleep(2, 4)
-            print("Search opened successfully")
-            return True
-            
-        except Exception as e:
-            print(f"Failed to open search: {str(e)}")
-            return False
-    
-    def search_user(self):
-        try:
-            print(f"Searching for user: {self.target_account}")
-            
-            # Wait for and find the search input using its aria-label
-            search_input = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, 'input[aria-label="Search input"]'))
-            )
-            random_sleep(1, 2)
-            
-            # Clear any existing text and type the target account
-            search_input.clear()
-            random_sleep(0.5, 1)
-            
-            # Type like a human
-            for char in self.target_account:
-                search_input.send_keys(char)
-                time.sleep(random.uniform(0.1, 0.3))
-            
-            random_sleep(2, 3)
-            
-            # Wait for and click the first search result
-            result_selector = f'a[href="/{self.target_account}/"]'
+            # Wait for profile to load by checking for profile elements
             try:
-                user_link = WebDriverWait(self.driver, 10).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, result_selector))
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, 'header section'))
                 )
-                random_sleep(1, 2)
-                user_link.click()
-                print(f"Successfully navigated to {self.target_account}'s profile")
+                print(f"Successfully loaded {self.target_account}'s profile")
+                random_sleep(2, 3)
                 return True
             except TimeoutException:
-                print(f"Could not find user: {self.target_account}")
+                print(f"Could not load profile for: {self.target_account}")
                 return False
                 
         except Exception as e:
-            print(f"Error searching for user: {str(e)}")
+            print(f"Error navigating to profile: {str(e)}")
             return False
 
     def run(self):
@@ -207,11 +165,8 @@ class InstagramTracker:
             if not self.login():
                 print("Failed to login, aborting...")
                 return
-            if not self.open_search():
-                print("Failed to open search, aborting...")
-                return
-            if not self.search_user():
-                print("Failed to find target user, aborting...")
+            if not self.navigate_to_profile():
+                print("Failed to load target profile, aborting...")
                 return
         except Exception as e:
             print(f"Error in run: {str(e)}")
