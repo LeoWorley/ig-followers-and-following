@@ -9,3 +9,6 @@ __pycache__/
 
 # cookies
 instagram_cookies.json
+
+# database
+instagram_tracker.db

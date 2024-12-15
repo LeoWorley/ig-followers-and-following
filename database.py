@@ -27,6 +27,14 @@ class ChangeLog(Base):
     change_type = Column(String, nullable=False)  # 'follower_gained', 'follower_lost', 'following_added', 'following_removed'
     username = Column(String, nullable=False)
 
+class FollowersCount(Base):
+    __tablename__ = 'followers_counts'
+    
+    id = Column(Integer, primary_key=True)
+    username = Column(String, nullable=False)
+    count = Column(Integer, nullable=False)
+    timestamp = Column(DateTime, nullable=False)
+
 class Database:
     def __init__(self):
         self.engine = create_engine('sqlite:///instagram_tracker.db')
@@ -58,6 +66,16 @@ class Database:
         )
         self.session.add(change)
         self.session.commit()
+    
+    def store_followers_count(self, username, count, timestamp):
+        followers_count = FollowersCount(
+            username=username,
+            count=count,
+            timestamp=timestamp
+        )
+        self.session.add(followers_count)
+        self.session.commit()
+        print(f"Stored followers count: {count} for user {username}")
     
     def get_latest_follower_snapshot(self):
         return self.session.query(FollowerSnapshot).order_by(FollowerSnapshot.timestamp.desc()).first()
