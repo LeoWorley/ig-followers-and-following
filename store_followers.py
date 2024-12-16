@@ -18,7 +18,7 @@ def store_followers(driver):
         
         # Wait for and find the scrollable container
         scroll_box = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="dialog"] div[style*="overflow"]'))
+            EC.presence_of_element_located((By.XPATH, '/html/body/div[5]/div[2]/div[1]/div[1]/div[1]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[2]/div[1]/div[1]/div[3]'))
         )
         
         while True:
@@ -43,13 +43,25 @@ def store_followers(driver):
                     continue
             
             # Scroll down
-            driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight', scroll_box)
-            time.sleep(2)  # Wait for content to load
+            try:
+                driver.execute_script("""
+                    arguments[0].scrollTo(0, arguments[0].scrollHeight);
+                """, scroll_box)
+                
+                # Add a small random delay between 1.5 and 2.5 seconds to mimic human behavior
+                time.sleep(1.5 + (time.time() % 1))
+            except Exception as e:
+                print(f"Error during scrolling: {str(e)}")
+                time.sleep(2)
             
             # Check if we've reached the bottom
             new_height = driver.execute_script('return arguments[0].scrollHeight', scroll_box)
             if new_height == last_height:
-                break  # No more content to load
+                # Try one more time to ensure we're really at the bottom
+                time.sleep(2)
+                new_height = driver.execute_script('return arguments[0].scrollHeight', scroll_box)
+                if new_height == last_height:
+                    break
             last_height = new_height
             
             print(f"Collected {len(followers_list)} followers so far...")
