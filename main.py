@@ -15,6 +15,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from webdriver_manager.chrome import ChromeDriverManager
+from store_followers import store_followers
 
 # Load environment variables
 load_dotenv()
@@ -181,12 +182,23 @@ class InstagramTracker:
             random_sleep(1, 2)
             followers_link.click()
             
-            # Wait for the followers modal to appear
+            # Wait for the followers modal to appear and load content
             try:
+                # First wait for modal
                 WebDriverWait(self.driver, 10).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="dialog"]'))
                 )
+                
+                # Then wait for actual content to load (non-loading placeholder elements)
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="dialog"] a[role="link"]'))
+                )
                 print("Followers list opened successfully")
+                
+                # Store the followers list
+                followers_list = store_followers(self.driver)
+                print(f"Stored {len(followers_list)} followers in the data directory")
+                
                 random_sleep(2, 3)
                 return followers_count
             except TimeoutException:
