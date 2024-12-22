@@ -35,13 +35,21 @@ class FollowersCount(Base):
     count = Column(Integer, nullable=False)
     timestamp = Column(DateTime, nullable=False)
 
+class FollowingsCount(Base):
+    __tablename__ = 'followings_counts'
+
+    id = Column(Integer, primary_key=True)
+    username = Column(String, nullable=False)
+    count = Column(Integer, nullable=False)
+    timestamp = Column(DateTime, nullable=False)
+
 class Database:
     def __init__(self):
         self.engine = create_engine('sqlite:///instagram_tracker.db')
         Base.metadata.create_all(self.engine)
         Session = sessionmaker(bind=self.engine)
         self.session = Session()
-    
+
     def save_follower_snapshot(self, followers):
         snapshot = FollowerSnapshot(
             timestamp=datetime.now(),
@@ -49,7 +57,7 @@ class Database:
         )
         self.session.add(snapshot)
         self.session.commit()
-    
+
     def save_following_snapshot(self, following):
         snapshot = FollowingSnapshot(
             timestamp=datetime.now(),
@@ -57,7 +65,7 @@ class Database:
         )
         self.session.add(snapshot)
         self.session.commit()
-    
+
     def log_change(self, change_type, username):
         change = ChangeLog(
             timestamp=datetime.now(),
@@ -66,7 +74,7 @@ class Database:
         )
         self.session.add(change)
         self.session.commit()
-    
+
     def store_followers_count(self, username, count, timestamp):
         followers_count = FollowersCount(
             username=username,
@@ -76,12 +84,22 @@ class Database:
         self.session.add(followers_count)
         self.session.commit()
         print(f"Stored followers count: {count} for user {username}")
-    
+
+    def store_followings_count(self, username, count, timestamp):
+        followings_count = FollowingsCount(
+            username=username,
+            count=count,
+            timestamp=timestamp
+        )
+        self.session.add(followings_count)
+        self.session.commit()
+        print(f"Stored followings count: {count} for user {username}")
+
     def get_latest_follower_snapshot(self):
         return self.session.query(FollowerSnapshot).order_by(FollowerSnapshot.timestamp.desc()).first()
-    
+
     def get_latest_following_snapshot(self):
         return self.session.query(FollowingSnapshot).order_by(FollowingSnapshot.timestamp.desc()).first()
-    
+
     def close(self):
         self.session.close()

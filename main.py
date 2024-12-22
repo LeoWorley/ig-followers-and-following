@@ -173,40 +173,93 @@ class InstagramTracker:
             followers_count_elem = followers_link.find_element(By.CSS_SELECTOR, 'span[class*="x5n08af"] span')
             followers_count = int(followers_count_elem.text.replace(',', ''))
             print(f"Found {followers_count} followers")
-            
+
             # Store the followers count in the database
             timestamp = datetime.now(pytz.UTC)
             self.db.store_followers_count(self.target_account, followers_count, timestamp)
-            
+
+            followers_count = int(followers_count_elem.text.replace(',', ''))
+            print(f"Found {followers_count} followers")
+
+            # Store the followers count in the database
+            timestamp = datetime.now(pytz.UTC)
+            self.db.store_followers_count(self.target_account, followers_count, timestamp)
+
             # Click on the followers link to open the list
             random_sleep(1, 2)
             followers_link.click()
-            
+
             # Wait for the followers modal to appear and load content
             try:
                 # First wait for modal
                 WebDriverWait(self.driver, 10).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="dialog"]'))
                 )
-                
+
                 # Then wait for actual content to load (non-loading placeholder elements)
                 WebDriverWait(self.driver, 10).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="dialog"] a[role="link"]'))
                 )
                 print("Followers list opened successfully")
-                
+
                 # Store the followers list
                 followers_list = store_followers(self.driver)
                 print(f"Stored {len(followers_list)} followers in the data directory")
-                
+
                 random_sleep(2, 3)
                 return followers_count
             except TimeoutException:
                 print("Failed to open followers list")
                 return None
-                
+
         except Exception as e:
             print(f"Error getting followers info: {str(e)}")
+            return None
+
+    def get_followings_info(self):
+        try:
+            print("Getting followings information...")
+
+            # Wait for the followings link to be present
+            followings_link = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, 'a[href*="/following/"]'))
+            )
+
+            # Get the followings count from the span
+            followings_count_elem = followings_link.find_element(By.CSS_SELECTOR, 'span span')
+            followings_count = int(followings_count_elem.text.replace(',', ''))
+            print(f"Found {followings_count} followings")
+
+            # Store the followings count in the database
+            timestamp = datetime.now(pytz.UTC)
+            self.db.store_followings_count(self.target_account, followings_count, timestamp)
+
+            # Click on the followings link to open the list
+            random_sleep(1, 2)
+            followings_link.click()
+
+            # Wait for the followings modal to appear and load content
+            try:
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="dialog"]'))
+                )
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="dialog"] a[role="link"]'))
+                )
+                print("Followings list opened successfully")
+
+                # Store the followings list
+                followings_list = store_followers(self.driver, list_type='followings')
+                print(f"Stored {len(followings_list)} followings in the data directory")
+
+                random_sleep(2, 3)
+                return followings_count
+            except TimeoutException:
+                print("Failed to open followings list")
+                return None
+
+        except Exception as e:
+            print(f"Error getting followings info: {str(e)}")
             return None
 
     def run(self):
@@ -222,11 +275,15 @@ class InstagramTracker:
             if followers_count is None:
                 print("Failed to get followers information, aborting...")
                 return
+            followings_count = self.get_followings_info()
+            if followings_count is None:
+                print("Failed to get followings information, aborting...")
+                return
         except Exception as e:
             print(f"Error in run: {str(e)}")
         finally:
-            if self.driver:
-                self.driver.quit()
+            #if self.driver:
+            #    self.driver.quit()
             self.db.close()
             print("Script finished")
 
@@ -234,14 +291,20 @@ def main():
     # Schedule the job to run once every 12 hours instead of every day
     # This reduces the chance of detection
     tracker = InstagramTracker()
-    
+
     # Run at 8 AM and 8 PM
     schedule.every().day.at("08:00").do(tracker.run)
     schedule.every().day.at("20:00").do(tracker.run)
-    
+
     # Run immediately for the first time
     tracker.run()
-    
+
+    # Keep the script running
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+
     # Keep the script running
     while True:
         schedule.run_pending()
