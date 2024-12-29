@@ -51,3 +51,7 @@ All data is stored in a SQLite database (`instagram_tracker.db`) with the follow
 ## Security Note
 
 Please keep your `.env` file secure and never commit it to version control.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
