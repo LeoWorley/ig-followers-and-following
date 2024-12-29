@@ -32,12 +32,7 @@ IG_PASSWORD=your_password
 TARGET_ACCOUNT=account_to_track
 ```
 
-4. Initialize the database:
-```bash
-python init_db.py
-```
-
-5. Run the tracker:
+4. Run the tracker:
 ```bash
 python main.py
 ```
