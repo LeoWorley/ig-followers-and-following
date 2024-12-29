@@ -4,89 +4,91 @@ from selenium.webdriver.support import expected_conditions as EC
 import json
 import os
 import time
+from datetime import datetime
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-import json
+import time
+from datetime import datetime
+from database import Database, FollowerFollowing
+from datetime import datetime
+import pytz
 
 def store_followers(driver, list_type='followers'):
-    try:
-        print(f"Storing {list_type}...")
-        
-        # Determine selectors and filename based on list_type
-        if list_type == 'followers':
-            modal_selector = 'div[role="dialog"] a[role="link"]'
-            filename = 'data/followers.json'
-        elif list_type == 'followings':
-            modal_selector = 'div[role="dialog"] a[role="link"]'
-            filename = 'data/followings.json'
-        else:
-            raise ValueError("Invalid list_type provided")
+    db = Database()
+    print(f"Storing {list_type}...")
+    now_utc = datetime.now(pytz.UTC)
+    target_username = driver.current_url.split('/')[-2]
+    target = db.get_target(target_username)
+    if not target:
+        target = db.add_target(target_username)
+    target_id = target.id
+    is_follower = list_type == 'followers'
+    current_items = set()
 
-        # Wait for the modal to be visible
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, modal_selector))
-        )
+    # Determine selectors based on list_type
+    if list_type == 'followers':
+        modal_selector = 'div[role="dialog"] a[role="link"]'
+    elif list_type == 'followings':
+        modal_selector = 'div[role="dialog"] a[role="link"]'
+    else:
+        raise ValueError("Invalid list_type provided")
 
-        items_list = []
-        last_height = 0
+    # Wait for the modal to be visible
+    WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, modal_selector))
+    )
 
-        # Wait for and find the scrollable container
-        scroll_box = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.XPATH, '/html/body/div[5]/div[2]/div[1]/div[1]/div[1]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[2]/div[1]/div[1]/div[3]'))
-        )
+    last_height = 0
+    scroll_box = WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.XPATH, '/html/body/div[5]/div[2]/div[1]/div[1]/div[1]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/div[2]/div[1]/div[1]/div[3]'))
+    )
 
-        while True:
-            # Get all current item elements
-            item_elements = driver.find_elements(By.CSS_SELECTOR, f'div[role="dialog"] a[role="link"]')
-
-            # Process visible elements
-            for element in item_elements:
-                try:
-                    username = element.get_attribute('href').split('/')[-2]
-                    profile_url = element.get_attribute('href').split('/?')[0]
-
-                    if username and not any(f['username'] == username for f in items_list):
-                        items_list.append({
-                            'username': username,
-                            'profile_url': profile_url
-                        })
-                except Exception as e:
-                    print(f"Error processing element: {str(e)}")
-                    continue
-
-            # Scroll down
+    while True:
+        item_elements = driver.find_elements(By.CSS_SELECTOR, f'div[role="dialog"] a[role="link"]')
+        for element in item_elements:
             try:
-                driver.execute_script("""
-                    arguments[0].scrollTo(0, arguments[0].scrollHeight);
-                """, scroll_box)
-                time.sleep(1.5 + (time.time() % 1))
+                username = element.get_attribute('href').split('/')[-2]
+                if username:
+                    current_items.add(username)
             except Exception as e:
-                print(f"Error during scrolling: {str(e)}")
-                time.sleep(2)
+                print(f"Error processing element: {e}")
+                continue
 
-            # Check if we've reached the bottom
-            new_height = driver.execute_script('return arguments[0].scrollHeight', scroll_box)
-            if new_height == last_height:
-                time.sleep(2)
-                new_height = driver.execute_script('return arguments[0].scrollHeight', scroll_box)
-                if new_height == last_height:
-                    break
-            last_height = new_height
+        driver.execute_script("""
+            arguments[0].scrollTo(0, arguments[0].scrollHeight);
+        """, scroll_box)
+        time.sleep(1 + (time.time() % 1))
 
-            print(f"Collected {len(items_list)} {list_type} so far...")
+        new_height = driver.execute_script('return arguments[0].scrollHeight', scroll_box)
+        if new_height == last_height:
+            break
+        last_height = new_height
 
-        # Create data directory if it doesn't exist
-        if not os.path.exists('data'):
-            os.makedirs('data')
+    print(f" Collected {len(current_items)} {list_type}")
 
-        # Store items in a JSON file
-        with open(filename, 'w') as f:
-            json.dump(items_list, f, indent=4)
+    # Get the existing items from the database for comparison
+    existing_items = {
+        entry.follower_following_username: entry
+        for entry in db.session.query(FollowerFollowing)
+        .filter_by(target_id=target_id, is_follower=is_follower)
+        .all()
+    }
 
-        print(f"Successfully stored {len(items_list)} {list_type}")
-        return items_list
+    # Add new items or update existing ones
+    for username in current_items:
+        if username not in existing_items:
+            db.add_follower_following(target_id=target_id, username=username, is_follower=is_follower, added_at=now_utc)
+        elif existing_items[username].lost_at is not None:
+            existing_items[username].lost_at = None
+            db.session.commit()
 
-    except Exception as e:
-        print(f"Error storing {list_type}: {str(e)}")
-        return []
+    # Mark items that are no longer present as lost
+    for username, entry in existing_items.items():
+        if username not in current_items and entry.lost_at is None:
+            entry.lost_at = now_utc
+            entry.is_lost = True
+            db.session.commit()
+
+    print(f"Successfully stored {len(current_items)} {list_type}")
+    return list(current_items)

@@ -6,7 +6,7 @@ import schedule
 from datetime import datetime
 import pytz
 from dotenv import load_dotenv
-from database import Database
+from database import Database, FollowerFollowing, Counts
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -16,6 +16,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from webdriver_manager.chrome import ChromeDriverManager
 from store_followers import store_followers
+from sqlalchemy.orm.attributes import flag_modified
 
 # Load environment variables
 load_dotenv()
@@ -174,16 +175,15 @@ class InstagramTracker:
             followers_count = int(followers_count_elem.text.replace(',', ''))
             print(f"Found {followers_count} followers")
 
-            # Store the followers count in the database
-            timestamp = datetime.now(pytz.UTC)
-            self.db.store_followers_count(self.target_account, followers_count, timestamp)
-
-            followers_count = int(followers_count_elem.text.replace(',', ''))
-            print(f"Found {followers_count} followers")
-
-            # Store the followers count in the database
-            timestamp = datetime.now(pytz.UTC)
-            self.db.store_followers_count(self.target_account, followers_count, timestamp)
+            # Get the target object
+            target = self.db.get_target(self.target_account)
+            if target:
+                # Store the followers count in the database
+                timestamp = datetime.now(pytz.UTC)
+                count_entry = Counts(target_id=target.id, count_type='followers', count=followers_count, timestamp=timestamp)
+                self.db.session.add(count_entry)
+                self.db.session.commit()
+            
 
             # Click on the followers link to open the list
             random_sleep(1, 2)
@@ -202,16 +202,18 @@ class InstagramTracker:
                 )
                 print("Followers list opened successfully")
 
-                # Store the followers list
-                followers_list = store_followers(self.driver)
-                print(f"Stored {len(followers_list)} followers in the data directory")
+                # Store current followers
+                store_followers(self.driver, list_type='followers')
+
+                # Close the modal
+                close_button = self.driver.find_element(By.XPATH, '/html/body/div[5]/div[2]/div/div/div[1]/div/div[2]/div/div/div/div/div[2]/div/div/div[1]/div/div[3]/div/button')
+                close_button.click()
 
                 random_sleep(2, 3)
                 return followers_count
             except TimeoutException:
                 print("Failed to open followers list")
                 return None
-
         except Exception as e:
             print(f"Error getting followers info: {str(e)}")
             return None
@@ -230,9 +232,14 @@ class InstagramTracker:
             followings_count = int(followings_count_elem.text.replace(',', ''))
             print(f"Found {followings_count} followings")
 
-            # Store the followings count in the database
-            timestamp = datetime.now(pytz.UTC)
-            self.db.store_followings_count(self.target_account, followings_count, timestamp)
+            # Get the target object
+            target = self.db.get_target(self.target_account)
+            if target:
+                # Store the followings count in the database
+                timestamp = datetime.now(pytz.UTC)
+                count_entry = Counts(target_id=target.id, count_type='followings', count=followings_count, timestamp=timestamp)
+                self.db.session.add(count_entry)
+                self.db.session.commit()
 
             # Click on the followings link to open the list
             random_sleep(1, 2)
@@ -248,16 +255,19 @@ class InstagramTracker:
                 )
                 print("Followings list opened successfully")
 
-                # Store the followings list
-                followings_list = store_followers(self.driver, list_type='followings')
-                print(f"Stored {len(followings_list)} followings in the data directory")
+                # Get current followings
+                current_followings_list = store_followers(self.driver, list_type='followings')
+                print(f"Fetched {len(current_followings_list)} followings")
+
+                # Close the modal
+                close_button = self.driver.find_element(By.XPATH, '/html/body/div[5]/div[2]/div/div/div[1]/div/div[2]/div/div/div/div/div[2]/div/div/div[1]/div/div[3]/div/button')
+                close_button.click()
 
                 random_sleep(2, 3)
                 return followings_count
             except TimeoutException:
                 print("Failed to open followings list")
                 return None
-
         except Exception as e:
             print(f"Error getting followings info: {str(e)}")
             return None
@@ -303,7 +313,6 @@ def main():
     while True:
         schedule.run_pending()
         time.sleep(60)
-
 
     # Keep the script running
     while True:

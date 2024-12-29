@@ -1,47 +1,46 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 
 Base = declarative_base()
 
-class FollowerSnapshot(Base):
-    __tablename__ = 'follower_snapshots'
+class Target(Base):
+    __tablename__ = 'targets'
     
     id = Column(Integer, primary_key=True)
-    timestamp = Column(DateTime, nullable=False)
-    followers = Column(JSON, nullable=False)
-    
-class FollowingSnapshot(Base):
-    __tablename__ = 'following_snapshots'
+    username = Column(String, unique=True, nullable=False)
+    followers_followings = relationship("FollowerFollowing", back_populates="target")
+
+class FollowerFollowing(Base):
+    __tablename__ = 'followers_followings'
     
     id = Column(Integer, primary_key=True)
-    timestamp = Column(DateTime, nullable=False)
-    following = Column(JSON, nullable=False)
+    target_id = Column(Integer, ForeignKey('targets.id'), nullable=False)
+    follower_following_username = Column(String, nullable=False)
+    is_follower = Column(Boolean, nullable=False)  # True for follower, False for following
+    added_at = Column(DateTime, nullable=False)
+    lost_at = Column(DateTime)
+    is_lost = Column(Boolean, default=False, nullable=False)
+
+    target = relationship("Target", back_populates="followers_followings")
 
 class ChangeLog(Base):
     __tablename__ = 'change_logs'
-    
+
     id = Column(Integer, primary_key=True)
-    timestamp = Column(DateTime, nullable=False)
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
     change_type = Column(String, nullable=False)  # 'follower_gained', 'follower_lost', 'following_added', 'following_removed'
     username = Column(String, nullable=False)
 
-class FollowersCount(Base):
-    __tablename__ = 'followers_counts'
-    
-    id = Column(Integer, primary_key=True)
-    username = Column(String, nullable=False)
-    count = Column(Integer, nullable=False)
-    timestamp = Column(DateTime, nullable=False)
-
-class FollowingsCount(Base):
-    __tablename__ = 'followings_counts'
+class Counts(Base):
+    __tablename__ = 'counts'
 
     id = Column(Integer, primary_key=True)
-    username = Column(String, nullable=False)
+    target_id = Column(Integer, ForeignKey('targets.id'), nullable=False)
+    count_type = Column(String, nullable=False)  # 'followers', 'followings'
     count = Column(Integer, nullable=False)
-    timestamp = Column(DateTime, nullable=False)
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 class Database:
     def __init__(self):
@@ -50,56 +49,24 @@ class Database:
         Session = sessionmaker(bind=self.engine)
         self.session = Session()
 
-    def save_follower_snapshot(self, followers):
-        snapshot = FollowerSnapshot(
-            timestamp=datetime.now(),
-            followers=followers
-        )
-        self.session.add(snapshot)
+    def get_target(self, username):
+        return self.session.query(Target).filter_by(username=username).first()
+
+    def add_target(self, username):
+        target = Target(username=username)
+        self.session.add(target)
         self.session.commit()
+        return target
 
-    def save_following_snapshot(self, following):
-        snapshot = FollowingSnapshot(
-            timestamp=datetime.now(),
-            following=following
+    def add_follower_following(self, target_id, username, is_follower, added_at=None):
+        ff = FollowerFollowing(
+            target_id=target_id,
+            follower_following_username=username,
+            is_follower=is_follower,
+            added_at=added_at if added_at else datetime.now()
         )
-        self.session.add(snapshot)
+        self.session.add(ff)
         self.session.commit()
-
-    def log_change(self, change_type, username):
-        change = ChangeLog(
-            timestamp=datetime.now(),
-            change_type=change_type,
-            username=username
-        )
-        self.session.add(change)
-        self.session.commit()
-
-    def store_followers_count(self, username, count, timestamp):
-        followers_count = FollowersCount(
-            username=username,
-            count=count,
-            timestamp=timestamp
-        )
-        self.session.add(followers_count)
-        self.session.commit()
-        print(f"Stored followers count: {count} for user {username}")
-
-    def store_followings_count(self, username, count, timestamp):
-        followings_count = FollowingsCount(
-            username=username,
-            count=count,
-            timestamp=timestamp
-        )
-        self.session.add(followings_count)
-        self.session.commit()
-        print(f"Stored followings count: {count} for user {username}")
-
-    def get_latest_follower_snapshot(self):
-        return self.session.query(FollowerSnapshot).order_by(FollowerSnapshot.timestamp.desc()).first()
-
-    def get_latest_following_snapshot(self):
-        return self.session.query(FollowingSnapshot).order_by(FollowingSnapshot.timestamp.desc()).first()
 
     def close(self):
         self.session.close()
