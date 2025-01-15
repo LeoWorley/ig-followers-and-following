@@ -5,13 +5,7 @@ import json
 import os
 import time
 from datetime import datetime
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-import time
-from datetime import datetime
 from database import Database, FollowerFollowing
-from datetime import datetime
 import pytz
 
 def store_followers(driver, list_type='followers'):
