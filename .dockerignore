@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+
+# Environment
+.env
+
+# Git
+.git
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
+
+# Project specific
+instagram_cookies.json
+instagram_tracker.db
+data/

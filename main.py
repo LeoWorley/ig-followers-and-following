@@ -38,14 +38,17 @@ class InstagramTracker:
         
     def setup_driver(self):
         chrome_options = Options()
-        # Don't run in headless mode to look more human-like
+        # Add arguments needed for running in Docker
+        chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.binary_location = os.getenv("CHROME_BIN", "/usr/bin/chromium")
         # Use a realistic user agent
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         
-        service = Service(ChromeDriverManager().install())
+        service = Service(os.getenv("CHROMEDRIVER_PATH", "/usr/bin/chromedriver"))
         self.driver = webdriver.Chrome(service=service, options=chrome_options)
         self.driver.implicitly_wait(10)
         
