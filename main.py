@@ -38,17 +38,37 @@ class InstagramTracker:
         
     def setup_driver(self):
         chrome_options = Options()
-        # Add arguments needed for running in Docker
-        chrome_options.add_argument("--headless")
+        
+        # Check if headless mode should be disabled (for debugging)
+        headless_mode = os.getenv("HEADLESS_MODE", "true").lower() == "true"
+        if headless_mode:
+            chrome_options.add_argument("--headless")
+            
+        # Add arguments needed for running in Docker and general stability
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        chrome_options.binary_location = os.getenv("CHROME_BIN", "/usr/bin/chromium")
+        chrome_options.add_argument("--disable-extensions")
+        chrome_options.add_argument("--disable-plugins")
+        
+        # Set Chrome binary location if specified (for Docker environments)
+        chrome_bin = os.getenv("CHROME_BIN")
+        if chrome_bin and os.path.exists(chrome_bin):
+            chrome_options.binary_location = chrome_bin
+            
         # Use a realistic user agent
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         
-        service = Service(os.getenv("CHROMEDRIVER_PATH", "/usr/bin/chromedriver"))
+        # Use ChromeDriverManager to automatically handle driver installation
+        # Check if a custom driver path is specified (for Docker environments)
+        chromedriver_path = os.getenv("CHROMEDRIVER_PATH")
+        if chromedriver_path and os.path.exists(chromedriver_path):
+            service = Service(chromedriver_path)
+        else:
+            # Use ChromeDriverManager to automatically download and manage the driver
+            service = Service(ChromeDriverManager().install())
+            
         self.driver = webdriver.Chrome(service=service, options=chrome_options)
         self.driver.implicitly_wait(10)
         
