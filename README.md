@@ -35,12 +35,28 @@ pip install -r requirements.txt
 IG_USERNAME=your_username
 IG_PASSWORD=your_password
 TARGET_ACCOUNT=account_to_track
+# Optional:
+# HEADLESS_MODE=true
+# LOGIN_ONLY_MODE=false
 ```
 
 4. Run the tracker:
 ```bash
 python main.py
 ```
+
+### Handling 2FA (recommended first run)
+
+If your Instagram account has two‑factor auth turned on:
+
+1. Set `HEADLESS_MODE=false` in your `.env` (or export it in the shell) so a visible Chrome window opens.
+2. Run `python main.py` and log in; enter the 6‑digit 2FA code when Instagram prompts you.
+3. On successful login the script saves a session to `instagram_cookies.json`.
+4. Switch back to headless by removing `HEADLESS_MODE` (or setting it to `true`) for scheduled runs; the saved cookies will be reused.
+
+If cookies expire (password change, new device/IP, etc.), repeat the headful steps above to refresh them.
+
+**Login-only helper (when headless keeps refreshing):** set `LOGIN_ONLY_MODE=true` and `HEADLESS_MODE=false`, then run `python main.py`. It opens a visible browser so you can complete 2FA, saves `instagram_cookies.json`, and exits without scraping. Set `LOGIN_ONLY_MODE` back to false afterward.
 
 ### Option 2: Docker
 

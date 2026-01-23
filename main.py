@@ -36,11 +36,14 @@ class InstagramTracker:
         self.driver = None
         self.cookies_file = 'instagram_cookies.json'
         
-    def setup_driver(self):
+    def setup_driver(self, headless_override=None):
         chrome_options = Options()
         
         # Check if headless mode should be disabled (for debugging)
-        headless_mode = os.getenv("HEADLESS_MODE", "true").lower() == "true"
+        if headless_override is None:
+            headless_mode = os.getenv("HEADLESS_MODE", "true").lower() == "true"
+        else:
+            headless_mode = headless_override
         if headless_mode:
             chrome_options.add_argument("--headless")
             
@@ -75,12 +78,12 @@ class InstagramTracker:
         # Set window size to look more natural
         self.driver.set_window_size(1280, 800)
     
-    def login(self):
+    def login(self, skip_cookie_login=False):
         try:
             print("Attempting to log in to Instagram...")
             
             # First try to use saved cookies
-            if self.load_cookies():
+            if (not skip_cookie_login) and self.load_cookies():
                 return True
                 
             print("Performing fresh login...")
@@ -226,11 +229,29 @@ class InstagramTracker:
                 print("Followers list opened successfully")
 
                 # Store current followers
-                store_followers(self.driver, list_type='followers')
+                try:
+                    followers_list = store_followers(self.driver, list_type='followers')
+                    if followers_list is not None and len(followers_list) > 0:
+                        print(f"Successfully scraped {len(followers_list)} followers")
+                    else:
+                        print("Warning: No followers were scraped")
+                except Exception as e:
+                    print(f"Error during followers scraping: {str(e)}")
+                    # Continue anyway, don't fail the entire process
 
                 # Close the modal
-                close_button = self.driver.find_element(By.XPATH, '/html/body/div[5]/div[2]/div/div/div[1]/div/div[2]/div/div/div/div/div[2]/div/div/div[1]/div/div[3]/div/button')
-                close_button.click()
+                try:
+                    close_button = self.driver.find_element(By.XPATH, '/html/body/div[5]/div[2]/div/div/div[1]/div/div[2]/div/div/div/div/div[2]/div/div/div[1]/div/div[3]/div/button')
+                    close_button.click()
+                except Exception as e:
+                    print(f"Error closing modal: {e}")
+                    # Try alternative close methods
+                    try:
+                        # Try pressing ESC key
+                        from selenium.webdriver.common.keys import Keys
+                        self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
+                    except Exception as e2:
+                        print(f"Could not close modal: {e2}")
 
                 random_sleep(2, 3)
                 return followers_count
@@ -279,12 +300,29 @@ class InstagramTracker:
                 print("Followings list opened successfully")
 
                 # Get current followings
-                current_followings_list = store_followers(self.driver, list_type='followings')
-                print(f"Fetched {len(current_followings_list)} followings")
+                try:
+                    current_followings_list = store_followers(self.driver, list_type='followings')
+                    if current_followings_list is not None and len(current_followings_list) > 0:
+                        print(f"Successfully scraped {len(current_followings_list)} followings")
+                    else:
+                        print("Warning: No followings were scraped")
+                except Exception as e:
+                    print(f"Error during followings scraping: {str(e)}")
+                    # Continue anyway, don't fail the entire process
 
                 # Close the modal
-                close_button = self.driver.find_element(By.XPATH, '/html/body/div[5]/div[2]/div/div/div[1]/div/div[2]/div/div/div/div/div[2]/div/div/div[1]/div/div[3]/div/button')
-                close_button.click()
+                try:
+                    close_button = self.driver.find_element(By.XPATH, '/html/body/div[5]/div[2]/div/div/div[1]/div/div[2]/div/div/div/div/div[2]/div/div/div[1]/div/div[3]/div/button')
+                    close_button.click()
+                except Exception as e:
+                    print(f"Error closing modal: {e}")
+                    # Try alternative close methods
+                    try:
+                        # Try pressing ESC key
+                        from selenium.webdriver.common.keys import Keys
+                        self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
+                    except Exception as e2:
+                        print(f"Could not close modal: {e2}")
 
                 random_sleep(2, 3)
                 return followings_count
@@ -306,12 +344,15 @@ class InstagramTracker:
                 return
             followers_count = self.get_followers_info()
             if followers_count is None:
-                print("Failed to get followers information, aborting...")
-                return
+                print("Failed to get followers information, but continuing...")
+            else:
+                print(f"Successfully processed {followers_count} followers")
+                
             followings_count = self.get_followings_info()
             if followings_count is None:
-                print("Failed to get followings information, aborting...")
-                return
+                print("Failed to get followings information, but continuing...")
+            else:
+                print(f"Successfully processed {followings_count} followings")
         except Exception as e:
             print(f"Error in run: {str(e)}")
         finally:
@@ -321,9 +362,22 @@ class InstagramTracker:
             print("Script finished")
 
 def main():
+    login_only_mode = os.getenv("LOGIN_ONLY_MODE", "false").lower() == "true"
+    tracker = InstagramTracker()
+
+    if login_only_mode:
+        print("LOGIN_ONLY_MODE is enabled; opening a visible browser for manual login/2FA.")
+        tracker.setup_driver(headless_override=False)
+        success = tracker.login(skip_cookie_login=True)
+        if success:
+            print("Login-only mode succeeded. Cookies saved to instagram_cookies.json. Exiting.")
+        else:
+            print("Login-only mode failed. Please retry with HEADLESS_MODE=false and correct credentials.")
+        tracker.db.close()
+        return
+
     # Schedule the job to run once every 12 hours instead of every day
     # This reduces the chance of detection
-    tracker = InstagramTracker()
 
     # Run at 8 AM and 8 PM
     schedule.every().day.at("08:00").do(tracker.run)
@@ -331,11 +385,6 @@ def main():
 
     # Run immediately for the first time
     tracker.run()
-
-    # Keep the script running
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
 
     # Keep the script running
     while True:
