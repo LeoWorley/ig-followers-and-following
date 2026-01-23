@@ -36,6 +36,34 @@ class InstagramTracker:
         self.driver = None
         self.cookies_file = 'instagram_cookies.json'
         
+    def close_modal(self):
+        """Attempt to close any open Instagram modal dialog."""
+        try:
+            close_btn = self.driver.find_element(By.CSS_SELECTOR, 'div[role="dialog"] button[aria-label="Close"]')
+            close_btn.click()
+            WebDriverWait(self.driver, 5).until(EC.invisibility_of_element(close_btn))
+            return True
+        except Exception:
+            pass
+        try:
+            close_svg = self.driver.find_element(By.CSS_SELECTOR, 'div[role="dialog"] svg[aria-label="Close"]')
+            close_svg.click()
+            WebDriverWait(self.driver, 5).until(EC.invisibility_of_element(close_svg))
+            return True
+        except Exception as e:
+            print(f"Modal close failed: {e}")
+        # Final fallback: ESC key
+        try:
+            from selenium.webdriver.common.keys import Keys
+            self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
+            WebDriverWait(self.driver, 3).until_not(
+                EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role=\"dialog\"]'))
+            )
+            return True
+        except Exception as e:
+            print(f"ESC close failed: {e}")
+            return False
+        
     def setup_driver(self, headless_override=None):
         chrome_options = Options()
         
@@ -230,7 +258,7 @@ class InstagramTracker:
 
                 # Store current followers
                 try:
-                    followers_list = store_followers(self.driver, list_type='followers')
+                    followers_list = store_followers(self.driver, list_type='followers', target_username=self.target_account)
                     if followers_list is not None and len(followers_list) > 0:
                         print(f"Successfully scraped {len(followers_list)} followers")
                     else:
@@ -240,18 +268,8 @@ class InstagramTracker:
                     # Continue anyway, don't fail the entire process
 
                 # Close the modal
-                try:
-                    close_button = self.driver.find_element(By.XPATH, '/html/body/div[5]/div[2]/div/div/div[1]/div/div[2]/div/div/div/div/div[2]/div/div/div[1]/div/div[3]/div/button')
-                    close_button.click()
-                except Exception as e:
-                    print(f"Error closing modal: {e}")
-                    # Try alternative close methods
-                    try:
-                        # Try pressing ESC key
-                        from selenium.webdriver.common.keys import Keys
-                        self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
-                    except Exception as e2:
-                        print(f"Could not close modal: {e2}")
+                if not self.close_modal():
+                    print("Warning: Could not close followers modal via primary methods")
 
                 random_sleep(2, 3)
                 return followers_count
@@ -287,7 +305,18 @@ class InstagramTracker:
 
             # Click on the followings link to open the list
             random_sleep(1, 2)
-            followings_link.click()
+            try:
+                WebDriverWait(self.driver, 5).until_not(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="dialog"]'))
+                )
+            except Exception:
+                pass
+            try:
+                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", followings_link)
+                followings_link.click()
+            except Exception as e:
+                print(f"Standard click on followings link failed: {e}, trying JS click")
+                self.driver.execute_script("arguments[0].click();", followings_link)
 
             # Wait for the followings modal to appear and load content
             try:
@@ -301,7 +330,7 @@ class InstagramTracker:
 
                 # Get current followings
                 try:
-                    current_followings_list = store_followers(self.driver, list_type='followings')
+                    current_followings_list = store_followers(self.driver, list_type='followings', target_username=self.target_account)
                     if current_followings_list is not None and len(current_followings_list) > 0:
                         print(f"Successfully scraped {len(current_followings_list)} followings")
                     else:
@@ -311,18 +340,8 @@ class InstagramTracker:
                     # Continue anyway, don't fail the entire process
 
                 # Close the modal
-                try:
-                    close_button = self.driver.find_element(By.XPATH, '/html/body/div[5]/div[2]/div/div/div[1]/div/div[2]/div/div/div/div/div[2]/div/div/div[1]/div/div[3]/div/button')
-                    close_button.click()
-                except Exception as e:
-                    print(f"Error closing modal: {e}")
-                    # Try alternative close methods
-                    try:
-                        # Try pressing ESC key
-                        from selenium.webdriver.common.keys import Keys
-                        self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
-                    except Exception as e2:
-                        print(f"Could not close modal: {e2}")
+                if not self.close_modal():
+                    print("Warning: Could not close followings modal via primary methods")
 
                 random_sleep(2, 3)
                 return followings_count
