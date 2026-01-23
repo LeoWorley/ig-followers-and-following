@@ -38,6 +38,8 @@ TARGET_ACCOUNT=account_to_track
 # Optional:
 # HEADLESS_MODE=true
 # LOGIN_ONLY_MODE=false
+# RUN_INTERVAL_MINUTES=60
+# RUN_JITTER_SECONDS=120
 ```
 
 4. Run the tracker:
@@ -57,6 +59,22 @@ If your Instagram account has two‑factor auth turned on:
 If cookies expire (password change, new device/IP, etc.), repeat the headful steps above to refresh them.
 
 **Login-only helper (when headless keeps refreshing):** set `LOGIN_ONLY_MODE=true` and `HEADLESS_MODE=false`, then run `python main.py`. It opens a visible browser so you can complete 2FA, saves `instagram_cookies.json`, and exits without scraping. Set `LOGIN_ONLY_MODE` back to false afterward.
+
+### Running as a service
+
+- Control frequency with `RUN_INTERVAL_MINUTES` (default 60) and optional `RUN_JITTER_SECONDS` to add a small random delay each cycle.
+- The script now runs in an endless loop; use a process manager (systemd/launchd/supervisor) to keep it alive.
+
+### Reporting
+
+After data is collected you can query it with `python report.py`:
+
+- `python report.py new --from 2026-01-01T00:00:00 --to 2026-01-07T23:59:59 --type followers`
+- `python report.py lost --from 2026-01-01T00:00:00 --to 2026-01-07T23:59:59 --type followings`
+- `python report.py snapshot --at 2026-01-23T12:00:00`
+- `python report.py summary --days 7`
+- `python report.py list --type both --out-csv current.csv` (current followers/followings, export optional)
+- Or interactive menu: `python report.py --menu`
 
 ### Option 2: Docker
 

@@ -2,21 +2,19 @@ import os
 import time
 import json
 import random
-import schedule
 from datetime import datetime
 import pytz
 from dotenv import load_dotenv
-from database import Database, FollowerFollowing, Counts
+from database import Database
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
 from store_followers import store_followers
-from sqlalchemy.orm.attributes import flag_modified
 
 # Load environment variables
 load_dotenv()
@@ -215,7 +213,7 @@ class InstagramTracker:
             print(f"Error navigating to profile: {str(e)}")
             return False
 
-    def get_followers_info(self):
+    def get_followers_info(self, target, run_started_at, run_id, prev_run_started_at):
         try:
             print("Getting followers information...")
             
@@ -230,13 +228,15 @@ class InstagramTracker:
             print(f"Found {followers_count} followers")
 
             # Get the target object
-            target = self.db.get_target(self.target_account)
+            # Store the followers count in the database
             if target:
-                # Store the followers count in the database
-                timestamp = datetime.now(pytz.UTC)
-                count_entry = Counts(target_id=target.id, count_type='followers', count=followers_count, timestamp=timestamp)
-                self.db.session.add(count_entry)
-                self.db.session.commit()
+                self.db.add_count(
+                    target_id=target.id,
+                    count_type='followers',
+                    count=followers_count,
+                    timestamp=run_started_at,
+                    run_id=run_id
+                )
             
 
             # Click on the followers link to open the list
@@ -258,7 +258,15 @@ class InstagramTracker:
 
                 # Store current followers
                 try:
-                    followers_list = store_followers(self.driver, list_type='followers', target_username=self.target_account)
+                    followers_list = store_followers(
+                        self.driver,
+                        db=self.db,
+                        target=target,
+                        list_type='followers',
+                        run_started_at=run_started_at,
+                        run_id=run_id,
+                        prev_run_started_at=prev_run_started_at
+                    )
                     if followers_list is not None and len(followers_list) > 0:
                         print(f"Successfully scraped {len(followers_list)} followers")
                     else:
@@ -280,7 +288,7 @@ class InstagramTracker:
             print(f"Error getting followers info: {str(e)}")
             return None
 
-    def get_followings_info(self):
+    def get_followings_info(self, target, run_started_at, run_id, prev_run_started_at):
         try:
             print("Getting followings information...")
 
@@ -295,13 +303,14 @@ class InstagramTracker:
             print(f"Found {followings_count} followings")
 
             # Get the target object
-            target = self.db.get_target(self.target_account)
             if target:
-                # Store the followings count in the database
-                timestamp = datetime.now(pytz.UTC)
-                count_entry = Counts(target_id=target.id, count_type='followings', count=followings_count, timestamp=timestamp)
-                self.db.session.add(count_entry)
-                self.db.session.commit()
+                self.db.add_count(
+                    target_id=target.id,
+                    count_type='followings',
+                    count=followings_count,
+                    timestamp=run_started_at,
+                    run_id=run_id
+                )
 
             # Click on the followings link to open the list
             random_sleep(1, 2)
@@ -330,7 +339,15 @@ class InstagramTracker:
 
                 # Get current followings
                 try:
-                    current_followings_list = store_followers(self.driver, list_type='followings', target_username=self.target_account)
+                    current_followings_list = store_followers(
+                        self.driver,
+                        db=self.db,
+                        target=target,
+                        list_type='followings',
+                        run_started_at=run_started_at,
+                        run_id=run_id,
+                        prev_run_started_at=prev_run_started_at
+                    )
                     if current_followings_list is not None and len(current_followings_list) > 0:
                         print(f"Successfully scraped {len(current_followings_list)} followings")
                     else:
@@ -353,6 +370,10 @@ class InstagramTracker:
             return None
 
     def run(self):
+        run_started_at = datetime.now(pytz.UTC)
+        run_record = None
+        followers_collected = 0
+        followings_collected = 0
         try:
             self.setup_driver()
             if not self.login():
@@ -361,30 +382,56 @@ class InstagramTracker:
             if not self.navigate_to_profile():
                 print("Failed to load target profile, aborting...")
                 return
-            followers_count = self.get_followers_info()
+
+            target = self.db.get_or_create_target(self.target_account)
+            prev_run = self.db.get_last_run(target.id)
+            prev_run_started_at = prev_run.run_started_at if prev_run else None
+            run_record = self.db.start_run(target.id, run_started_at)
+            run_id = run_record.id
+
+            followers_count = self.get_followers_info(target, run_started_at, run_id, prev_run_started_at)
             if followers_count is None:
                 print("Failed to get followers information, but continuing...")
             else:
                 print(f"Successfully processed {followers_count} followers")
-                
-            followings_count = self.get_followings_info()
+                followers_collected = followers_count
+
+            followings_count = self.get_followings_info(target, run_started_at, run_id, prev_run_started_at)
             if followings_count is None:
                 print("Failed to get followings information, but continuing...")
             else:
                 print(f"Successfully processed {followings_count} followings")
+                followings_collected = followings_count
+
+            if run_record:
+                self.db.finish_run(run_record.id, status="success",
+                                   followers_collected=followers_collected,
+                                   followings_collected=followings_collected,
+                                   finished_at=datetime.now(pytz.UTC))
         except Exception as e:
             print(f"Error in run: {str(e)}")
+            if run_record:
+                self.db.finish_run(run_record.id, status="failed",
+                                   followers_collected=followers_collected,
+                                   followings_collected=followings_collected,
+                                   finished_at=datetime.now(pytz.UTC))
         finally:
-            #if self.driver:
-            #    self.driver.quit()
+            if self.driver:
+                try:
+                    self.driver.quit()
+                except Exception:
+                    pass
             self.db.close()
             print("Script finished")
 
+
 def main():
     login_only_mode = os.getenv("LOGIN_ONLY_MODE", "false").lower() == "true"
-    tracker = InstagramTracker()
+    interval_minutes = int(os.getenv("RUN_INTERVAL_MINUTES", "60"))
+    jitter_seconds = int(os.getenv("RUN_JITTER_SECONDS", "120"))
 
     if login_only_mode:
+        tracker = InstagramTracker()
         print("LOGIN_ONLY_MODE is enabled; opening a visible browser for manual login/2FA.")
         tracker.setup_driver(headless_override=False)
         success = tracker.login(skip_cookie_login=True)
@@ -395,20 +442,13 @@ def main():
         tracker.db.close()
         return
 
-    # Schedule the job to run once every 12 hours instead of every day
-    # This reduces the chance of detection
-
-    # Run at 8 AM and 8 PM
-    schedule.every().day.at("08:00").do(tracker.run)
-    schedule.every().day.at("20:00").do(tracker.run)
-
-    # Run immediately for the first time
-    tracker.run()
-
-    # Keep the script running
     while True:
-        schedule.run_pending()
-        time.sleep(60)
+        tracker = InstagramTracker()
+        tracker.run()
+        sleep_seconds = interval_minutes * 60 + random.randint(0, jitter_seconds)
+        print(f"Sleeping for {sleep_seconds} seconds until next run...")
+        time.sleep(sleep_seconds)
+
 
 if __name__ == "__main__":
     main()

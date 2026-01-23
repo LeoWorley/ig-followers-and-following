@@ -1,13 +1,10 @@
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-import json
-import os
 import time
 from datetime import datetime
-from database import Database, FollowerFollowing
-import pytz
-from typing import Optional
+from database import FollowerFollowing
+from typing import Optional, Set
 
 def _find_scroll_container(driver) -> Optional[object]:
     """
@@ -37,19 +34,20 @@ def _find_scroll_container(driver) -> Optional[object]:
         print(f"JS scroll container detection failed: {e}")
         return None
 
-def store_followers(driver, list_type='followers', target_username=None):
-    db = Database()
+def store_followers(
+    driver,
+    db,
+    target,
+    list_type='followers',
+    run_started_at: datetime = None,
+    run_id: int = None,
+    prev_run_started_at: Optional[datetime] = None,
+) -> Set[str]:
+    """Scrape a followers/followings modal and update DB with run-aware timestamps."""
     print(f"Storing {list_type}...")
-    
+
     try:
-        now_utc = datetime.now(pytz.UTC)
-        if not target_username:
-            target_username = driver.current_url.strip('/').split('/')[-1]
-        print(f"Target username: {target_username}")
-        
-        target = db.get_target(target_username)
-        if not target:
-            target = db.add_target(target_username)
+        now_utc = run_started_at if run_started_at else datetime.utcnow()
         target_id = target.id
         is_follower = list_type == 'followers'
         current_items = set()
@@ -71,7 +69,7 @@ def store_followers(driver, list_type='followers', target_username=None):
 
         # First try JS-based overflow detection (handles changing class names)
         scroll_box = _find_scroll_container(driver)
-        
+
         # Try multiple selectors for the scroll container if JS failed
         scroll_selectors = [
             # More flexible selectors for the scrollable container
@@ -197,23 +195,49 @@ def store_followers(driver, list_type='followers', target_username=None):
         # Add new items or update existing ones
         for username in current_items:
             if username not in existing_items:
-                db.add_follower_following(target_id=target_id, username=username, is_follower=is_follower, added_at=now_utc)
-            elif existing_items[username].lost_at is not None:
-                existing_items[username].lost_at = None
-                db.session.commit()
+                est_added = None
+                if prev_run_started_at:
+                    est_added = prev_run_started_at + (run_started_at - prev_run_started_at) / 2
+                ff = FollowerFollowing(
+                    target_id=target_id,
+                    follower_following_username=username,
+                    is_follower=is_follower,
+                    added_at=now_utc,
+                    first_seen_run_at=run_started_at,
+                    last_seen_run_at=run_started_at,
+                    estimated_added_at=est_added,
+                    is_lost=False,
+                )
+                db.session.add(ff)
+            else:
+                ff = existing_items[username]
+                if ff.first_seen_run_at is None:
+                    ff.first_seen_run_at = ff.added_at or run_started_at
+                ff.last_seen_run_at = run_started_at
+                ff.is_lost = False
+                ff.lost_at = None
+                ff.lost_at_run_at = None
+        db.session.commit()
 
         # Mark items that are no longer present as lost
         for username, entry in existing_items.items():
-            if username not in current_items and entry.lost_at is None:
-                entry.lost_at = now_utc
+            if username not in current_items and not entry.is_lost:
                 entry.is_lost = True
-                db.session.commit()
+                entry.lost_at = run_started_at
+                entry.lost_at_run_at = run_started_at
+                if entry.last_seen_run_at is None:
+                    entry.last_seen_run_at = run_started_at
+                if entry.last_seen_run_at:
+                    entry.estimated_removed_at = entry.last_seen_run_at + (run_started_at - entry.last_seen_run_at) / 2
+                else:
+                    entry.estimated_removed_at = run_started_at
+        db.session.commit()
 
         print(f"Successfully stored {len(current_items)} {list_type}")
-        return list(current_items)
-        
+        return current_items
+
     except Exception as e:
         print(f"Error in store_followers: {str(e)}")
         import traceback
         traceback.print_exc()
-        return []
+        return set()
