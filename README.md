@@ -60,10 +60,17 @@ If cookies expire (password change, new device/IP, etc.), repeat the headful ste
 
 **Login-only helper (when headless keeps refreshing):** set `LOGIN_ONLY_MODE=true` and `HEADLESS_MODE=false`, then run `python main.py`. It opens a visible browser so you can complete 2FA, saves `instagram_cookies.json`, and exits without scraping. Set `LOGIN_ONLY_MODE` back to false afterward.
 
+**Quick start for 2FA users**
+- Do one visible run (`HEADLESS_MODE=false`, `LOGIN_ONLY_MODE=true`) to generate `instagram_cookies.json`.
+- Then schedule/run normally with `HEADLESS_MODE=true`, `LOGIN_ONLY_MODE=false`; the service will reuse the cookie on each run.
+- If you ever change password or the cookie expires, repeat the visible login step.
+
 ### Running as a service
 
 - Control frequency with `RUN_INTERVAL_MINUTES` (default 60) and optional `RUN_JITTER_SECONDS` to add a small random delay each cycle.
 - The script now runs in an endless loop; use a process manager (systemd/launchd/supervisor) to keep it alive.
+- **macOS (launchd):** create `~/Library/LaunchAgents/com.instagram.tracker.plist` that runs `cd /Users/<you>/dev/ig-follwers-and-following && source venv/bin/activate && set -a; source .env; set +a; caffeinate -dims python3 main.py >> /tmp/instagram-tracker.log 2>&1`, set `RunAtLoad` and `KeepAlive` to true, then `launchctl load ~/Library/LaunchAgents/com.instagram.tracker.plist`. Keep the lid closed but prevent sleep with `caffeinate -dims` (or `sudo pmset -a disablesleep 1`).
+- **Windows (Task Scheduler):** create a task that runs hourly, even when locked: `powershell -NoProfile -ExecutionPolicy Bypass -Command "cd C:\\path\\to\\ig-follwers-and-following; .\\venv\\Scripts\\Activate.ps1; setx IG_USERNAME '...'; setx IG_PASSWORD '...'; setx TARGET_ACCOUNT '...'; python main.py >> C:\\path\\to\\tracker.log 2>&1"`. Set “Run whether user is logged on or not” and disable sleep in Power Options.
 
 ### Reporting
 
