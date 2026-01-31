@@ -11,9 +11,18 @@ __pycache__/
 instagram_cookies.json
 
 # database
-instagram_tracker.db
+instagram_tracker*.db
 data/followers.json
 data/followings.json
+exports/
+reports/
+
+# logs
+tracker.log
+*.log
+
+# OS junk
+.DS_Store
 
 # windsurf rules
 .windsurfrules
