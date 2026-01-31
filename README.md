@@ -41,6 +41,11 @@ TARGET_ACCOUNT=account_to_track
 # LOGIN_ONLY_TIMEOUT_SECONDS=600
 # RUN_INTERVAL_MINUTES=60
 # RUN_JITTER_SECONDS=120
+# TRAY_AUTO_START=false
+# TRAY_LOG_PATH=tracker.log
+# TRAY_REPORTS_DIR=reports
+# TRAY_REPORT_DAYS=7
+# TRAY_STATUS_POLL_SECONDS=5
 ```
 
 4. Run the tracker:
@@ -86,6 +91,34 @@ If cookies expire (password change, new device/IP, etc.), repeat the headful ste
   - Make sure `.env` and `instagram_cookies.json` are in the project folder.
   - For scheduled runs, use `HEADLESS_MODE=true` and `LOGIN_ONLY_MODE=false`.
   - If you need 2FA, run one login-only session interactively first: set `LOGIN_ONLY_MODE=true`, `HEADLESS_MODE=false`, run `python main.py` in a normal terminal, complete login, then set `LOGIN_ONLY_MODE=false`.
+
+### Tray app (Windows, optional)
+
+Use this if you want a small tray icon that starts/stops the tracker directly.
+
+1. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+2. Run the tray app:
+```bash
+python tray_app.py
+```
+
+3. Run the tray app in background (no terminal):
+```powershell
+.\start_tray.ps1
+```
+
+Notes:
+- The tray app only runs while you are logged in. If you need it running while logged off, use Task Scheduler instead.
+- Closing the tray app will stop the tracker process.
+- You can auto-start the tracker from the tray by setting `TRAY_AUTO_START=true`.
+- `TRAY_LOG_PATH` controls where logs are written (default `tracker.log`).
+- `TRAY_REPORTS_DIR` controls where tray-generated reports are saved (default `reports`).
+- `TRAY_REPORT_DAYS` controls the date range for the tray reports (default 7).
+- `TRAY_STATUS_POLL_SECONDS` controls how often the tray tooltip updates.
 
 ### Reporting
 
