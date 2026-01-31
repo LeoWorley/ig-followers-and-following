@@ -42,10 +42,18 @@ TARGET_ACCOUNT=account_to_track
 # RUN_INTERVAL_MINUTES=60
 # RUN_JITTER_SECONDS=120
 # TRAY_AUTO_START=false
+# TRAY_MONITOR_ONLY=false
 # TRAY_LOG_PATH=tracker.log
 # TRAY_REPORTS_DIR=reports
 # TRAY_REPORT_DAYS=7
 # TRAY_STATUS_POLL_SECONDS=5
+# GUI_AUTO_START=false
+# GUI_MONITOR_ONLY=false
+# GUI_LOG_PATH=tracker.log
+# GUI_REPORTS_DIR=reports
+# GUI_REPORT_DAYS=7
+# GUI_STATUS_POLL_SECONDS=5
+# GUI_OPTIONS_POLL_SECONDS=30
 ```
 
 4. Run the tracker:
@@ -115,10 +123,29 @@ Notes:
 - The tray app only runs while you are logged in. If you need it running while logged off, use Task Scheduler instead.
 - Closing the tray app will stop the tracker process.
 - You can auto-start the tracker from the tray by setting `TRAY_AUTO_START=true`.
+- If Task Scheduler is running the tracker, set `TRAY_MONITOR_ONLY=true` to avoid double runs.
 - `TRAY_LOG_PATH` controls where logs are written (default `tracker.log`).
 - `TRAY_REPORTS_DIR` controls where tray-generated reports are saved (default `reports`).
 - `TRAY_REPORT_DAYS` controls the date range for the tray reports (default 7).
 - `TRAY_STATUS_POLL_SECONDS` controls how often the tray tooltip updates.
+
+### GUI app (Windows/macOS)
+
+Use this if you want a full window with all report options (new/lost ranges, daily counts, day details, snapshot, exports).
+
+1. Run the GUI app:
+```bash
+python gui_app.py
+```
+
+Notes:
+- The GUI app can start/stop the tracker like the tray.
+- If Task Scheduler is running the tracker, set `GUI_MONITOR_ONLY=true` to avoid double runs.
+- You can auto-start the tracker from the GUI by setting `GUI_AUTO_START=true`.
+- Report outputs are saved to `GUI_REPORTS_DIR` (default `reports`).
+- The date picker uses `tkcalendar` (included in `requirements.txt`). Date/target/time dropdowns are populated from your DB.
+- GUI options refresh automatically every `GUI_OPTIONS_POLL_SECONDS` (default 30), or via the refresh button.
+- Reports now render inside the GUI; use "Save output" if you want to export a report to a file.
 
 ### Reporting
 
@@ -128,6 +155,8 @@ After data is collected you can query it with `python report.py`:
 - `python report.py lost --from 2026-01-01T00:00:00 --to 2026-01-07T23:59:59 --type followings`
 - `python report.py snapshot --at 2026-01-23T12:00:00`
 - `python report.py summary --days 7`
+- `python report.py daily --days 7` (daily followers/followings counts)
+- `python report.py day --date 2026-01-31` (counts + new/lost for a specific day)
 - `python report.py list --type both --out-csv current.csv` (current followers/followings, export optional)
 - Or interactive menu: `python report.py --menu`
 

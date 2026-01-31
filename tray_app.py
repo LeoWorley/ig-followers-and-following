@@ -23,6 +23,7 @@ REPORTS_DIR = Path(os.getenv("TRAY_REPORTS_DIR", str(ROOT_DIR / "reports")))
 REPORT_DAYS = int(os.getenv("TRAY_REPORT_DAYS", "7"))
 POLL_SECONDS = int(os.getenv("TRAY_STATUS_POLL_SECONDS", "5"))
 AUTO_START = os.getenv("TRAY_AUTO_START", "false").lower() == "true"
+MONITOR_ONLY = os.getenv("TRAY_MONITOR_ONLY", "false").lower() == "true"
 
 _process_lock = threading.Lock()
 _process = None
@@ -65,6 +66,8 @@ def _tracker_env(overrides=None):
 
 
 def _start_tracker(_=None):
+    if MONITOR_ONLY:
+        return
     global _process, _log_handle
     with _process_lock:
         if _process is not None and _process.poll() is None:
@@ -81,6 +84,8 @@ def _start_tracker(_=None):
 
 
 def _stop_tracker(_=None):
+    if MONITOR_ONLY:
+        return
     global _process, _log_handle
     with _process_lock:
         if _process is None or _process.poll() is not None:
@@ -101,6 +106,8 @@ def _stop_tracker(_=None):
 
 
 def _run_login_only(_=None):
+    if MONITOR_ONLY:
+        return
     if _is_running():
         return
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -126,15 +133,27 @@ def _run_login_only(_=None):
     threading.Thread(target=_wait_and_close, daemon=True).start()
 
 
+def _open_path(path: Path):
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(str(path))
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(path)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(path)], check=False)
+    except Exception:
+        pass
+
+
 def _open_log(_=None):
     if not LOG_PATH.exists():
         LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         LOG_PATH.touch()
-    os.startfile(str(LOG_PATH))
+    _open_path(LOG_PATH)
 
 
 def _open_folder(_=None):
-    os.startfile(str(ROOT_DIR))
+    _open_path(ROOT_DIR)
 
 
 def _parse_dt(value):
@@ -259,9 +278,33 @@ def _report_snapshot(_=None):
     _run_report_to_file(["snapshot", "--at", at, "--type", "both"], "snapshot_now.txt")
 
 
+def _report_daily_counts(_=None):
+    _run_report_to_file(
+        ["daily", "--days", str(REPORT_DAYS)],
+        f"daily_{REPORT_DAYS}d.txt",
+    )
+
+
+def _report_day_details(date_str: str, label: str):
+    _run_report_to_file(
+        ["day", "--date", date_str, "--type", "both"],
+        f"day_{label}_{date_str}.txt",
+    )
+
+
+def _report_day_today(_=None):
+    date_str = datetime.now().date().isoformat()
+    _report_day_details(date_str, "today")
+
+
+def _report_day_yesterday(_=None):
+    date_str = (datetime.now().date() - timedelta(days=1)).isoformat()
+    _report_day_details(date_str, "yesterday")
+
+
 def _open_reports_folder(_=None):
     _ensure_reports_dir()
-    os.startfile(str(REPORTS_DIR))
+    _open_path(REPORTS_DIR)
 
 
 def _status_title():
@@ -296,13 +339,16 @@ def _menu():
         pystray.MenuItem(f"Summary last {REPORT_DAYS} days", _report_summary),
         pystray.MenuItem(f"New last {REPORT_DAYS} days", _report_new),
         pystray.MenuItem(f"Lost last {REPORT_DAYS} days", _report_lost),
+        pystray.MenuItem(f"Daily counts last {REPORT_DAYS} days", _report_daily_counts),
+        pystray.MenuItem("Day details (today)", _report_day_today),
+        pystray.MenuItem("Day details (yesterday)", _report_day_yesterday),
         pystray.MenuItem("Snapshot now", _report_snapshot),
         pystray.MenuItem("Open reports folder", _open_reports_folder),
     )
     return pystray.Menu(
-        pystray.MenuItem("Start tracker", _start_tracker, enabled=lambda _: not _is_running()),
-        pystray.MenuItem("Stop tracker", _stop_tracker, enabled=lambda _: _is_running()),
-        pystray.MenuItem("Login-only (visible browser)", _run_login_only, enabled=lambda _: not _is_running()),
+        pystray.MenuItem("Start tracker", _start_tracker, enabled=lambda _: (not MONITOR_ONLY and not _is_running())),
+        pystray.MenuItem("Stop tracker", _stop_tracker, enabled=lambda _: (not MONITOR_ONLY and _is_running())),
+        pystray.MenuItem("Login-only (visible browser)", _run_login_only, enabled=lambda _: (not MONITOR_ONLY and not _is_running())),
         pystray.MenuItem("Reports", reports_menu),
         pystray.MenuItem("Open log", _open_log),
         pystray.MenuItem("Open folder", _open_folder),
@@ -313,7 +359,7 @@ def _menu():
 def main():
     icon = pystray.Icon("ig-tracker", _create_image(), APP_TITLE, menu=_menu())
     threading.Thread(target=_update_loop, args=(icon,), daemon=True).start()
-    if AUTO_START:
+    if AUTO_START and not MONITOR_ONLY:
         _start_tracker()
     icon.run()
 

@@ -8,3 +8,4 @@ rich>=13.7.0
 questionary>=2.0.1
 pystray>=0.19.5
 pillow>=10.2.0
+tkcalendar>=1.6.1

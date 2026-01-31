@@ -1,6 +1,6 @@
 import argparse
-from datetime import datetime, timedelta
-from typing import Optional, List
+from datetime import datetime, timedelta, date, time as dt_time
+from typing import Optional, List, Tuple, Dict
 
 import pytz
 from rich.console import Console
@@ -8,8 +8,9 @@ from rich.table import Table
 from rich.prompt import Prompt
 from rich import box
 import questionary
+from sqlalchemy import func
 
-from database import Database, FollowerFollowing, Target, RunHistory
+from database import Database, FollowerFollowing, Target, RunHistory, Counts
 
 console = Console()
 
@@ -20,6 +21,23 @@ def parse_iso(dt_str: str) -> datetime:
 
 def resolve_time(ts: Optional[str]) -> datetime:
     return parse_iso(ts) if ts else datetime.utcnow()
+
+
+def resolve_range(from_date: Optional[str], to_date: Optional[str], days: Optional[int]) -> Tuple[datetime, datetime]:
+    if from_date and to_date:
+        return parse_iso(from_date), parse_iso(to_date)
+    if days is None:
+        days = 7
+    end = datetime.utcnow()
+    start = end - timedelta(days=days)
+    return start, end
+
+
+def resolve_day(day_str: str) -> Tuple[datetime, datetime]:
+    day_dt = datetime.fromisoformat(day_str).date()
+    start = datetime.combine(day_dt, dt_time.min)
+    end = start + timedelta(days=1) - timedelta(microseconds=1)
+    return start, end
 
 
 def build_table(title: str, columns: List[str]):
@@ -170,6 +188,112 @@ def cmd_summary(db: Database, args):
     console.print(table)
 
 
+def cmd_daily_counts(db: Database, args):
+    start, end = resolve_range(getattr(args, "from_date", None), getattr(args, "to_date", None), getattr(args, "days", None))
+
+    sub = (
+        db.session.query(
+            func.date(Counts.timestamp).label("day"),
+            Counts.count_type.label("count_type"),
+            Counts.target_id.label("target_id"),
+            func.max(Counts.timestamp).label("max_ts"),
+        )
+        .filter(Counts.timestamp >= start, Counts.timestamp <= end)
+        .group_by(func.date(Counts.timestamp), Counts.count_type, Counts.target_id)
+    )
+
+    if args.target:
+        sub = sub.join(Target, Target.id == Counts.target_id).filter(Target.username == args.target)
+
+    sub = sub.subquery()
+
+    q = (
+        db.session.query(
+            sub.c.day,
+            sub.c.count_type,
+            sub.c.target_id,
+            Counts.count,
+        )
+        .join(
+            Counts,
+            (Counts.target_id == sub.c.target_id)
+            & (Counts.count_type == sub.c.count_type)
+            & (Counts.timestamp == sub.c.max_ts),
+        )
+        .join(Target, Target.id == sub.c.target_id)
+    )
+
+    rows = q.all()
+    if not rows:
+        console.print("[yellow]No daily counts found for the selected range.[/yellow]")
+        return
+
+    target_names = {}
+    for tid in {row[2] for row in rows}:
+        target_names[tid] = db.session.query(Target.username).filter_by(id=tid).scalar()
+
+    data: Dict[Tuple[str, str], Dict[str, Optional[int]]] = {}
+    for day, count_type, target_id, count in rows:
+        target_name = target_names.get(target_id) or "-"
+        key = (str(day), target_name)
+        data.setdefault(key, {"followers": None, "followings": None})
+        if count_type == "followers":
+            data[key]["followers"] = count
+        elif count_type == "followings":
+            data[key]["followings"] = count
+
+    if args.target:
+        table = build_table(
+            f"Daily counts ({start.date()} to {end.date()})",
+            ["date", "followers", "followings"],
+        )
+        for (day, _target), vals in sorted(data.items()):
+            table.add_row(day, str(vals["followers"] or "-"), str(vals["followings"] or "-"))
+    else:
+        table = build_table(
+            f"Daily counts ({start.date()} to {end.date()})",
+            ["date", "target", "followers", "followings"],
+        )
+        for (day, target_name), vals in sorted(data.items()):
+            table.add_row(day, target_name, str(vals["followers"] or "-"), str(vals["followings"] or "-"))
+    console.print(table)
+
+
+def cmd_day_details(db: Database, args):
+    start, end = resolve_day(args.date)
+
+    console.print(f"[bold]Daily counts for {args.date}[/bold]")
+    daily_args = argparse.Namespace(
+        from_date=start.isoformat(),
+        to_date=end.isoformat(),
+        days=None,
+        target=args.target,
+    )
+    cmd_daily_counts(db, daily_args)
+
+    console.print(f"[bold]New {args.type} on {args.date}[/bold]")
+    cmd_new(
+        db,
+        argparse.Namespace(
+            from_date=start.isoformat(),
+            to_date=end.isoformat(),
+            type=args.type,
+            target=args.target,
+        ),
+    )
+
+    console.print(f"[bold]Lost {args.type} on {args.date}[/bold]")
+    cmd_lost(
+        db,
+        argparse.Namespace(
+            from_date=start.isoformat(),
+            to_date=end.isoformat(),
+            type=args.type,
+            target=args.target,
+        ),
+    )
+
+
 def menu(db: Database):
     action = questionary.select(
         "Choose report",
@@ -178,6 +302,8 @@ def menu(db: Database):
             "Lost in range",
             "Snapshot at time",
             "Summary last N days",
+            "Daily counts",
+            "Day details",
             "Current followers/followings",
             "Quit"
         ]).ask()
@@ -197,6 +323,15 @@ def menu(db: Database):
     elif action == "Summary last N days":
         days = int(Prompt.ask("Days", default="7"))
         cmd_summary(db, argparse.Namespace(days=days))
+    elif action == "Daily counts":
+        days = int(Prompt.ask("Days", default="7"))
+        target = Prompt.ask("Target username (blank for all)", default="")
+        cmd_daily_counts(db, argparse.Namespace(days=days, target=target or None, from_date=None, to_date=None))
+    elif action == "Day details":
+        day = Prompt.ask("Day (YYYY-MM-DD)")
+        target = Prompt.ask("Target username (blank for all)", default="")
+        ftype = questionary.select("Type", choices=["both", "followers", "followings"]).ask()
+        cmd_day_details(db, argparse.Namespace(date=day, target=target or None, type=ftype or "both"))
     elif action == "Current followers/followings":
         target = Prompt.ask("Target username (blank for all)", default="")
         ftype = questionary.select("Type", choices=["both", "followers", "followings"]).ask()
@@ -230,6 +365,17 @@ def build_parser():
     p_summary = sub.add_parser("summary", help="Summary over last N days")
     p_summary.add_argument("--days", type=int, default=7)
 
+    p_daily = sub.add_parser("daily", help="Daily follower/following counts")
+    p_daily.add_argument("--days", type=int, default=7)
+    p_daily.add_argument("--from", dest="from_date", help="ISO datetime start")
+    p_daily.add_argument("--to", dest="to_date", help="ISO datetime end")
+    p_daily.add_argument("--target", help="Target account to filter")
+
+    p_day = sub.add_parser("day", help="Counts and changes for a specific day")
+    p_day.add_argument("--date", required=True, help="YYYY-MM-DD")
+    p_day.add_argument("--type", choices=["followers", "followings", "both"], default="both")
+    p_day.add_argument("--target", help="Target account to filter")
+
     p_list = sub.add_parser("list", help="List current followers/followings")
     p_list.add_argument("--type", choices=["followers", "followings", "both"], default="both")
     p_list.add_argument("--target", help="Target account to filter")
@@ -256,6 +402,10 @@ def main():
             cmd_snapshot(db, args)
         elif args.command == "summary":
             cmd_summary(db, args)
+        elif args.command == "daily":
+            cmd_daily_counts(db, args)
+        elif args.command == "day":
+            cmd_day_details(db, args)
         elif args.command == "list":
             cmd_list_current(db, args)
         else:
