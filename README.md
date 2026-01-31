@@ -38,6 +38,7 @@ TARGET_ACCOUNT=account_to_track
 # Optional:
 # HEADLESS_MODE=true
 # LOGIN_ONLY_MODE=false
+# LOGIN_ONLY_TIMEOUT_SECONDS=600
 # RUN_INTERVAL_MINUTES=60
 # RUN_JITTER_SECONDS=120
 ```
@@ -58,7 +59,7 @@ If your Instagram account has two‑factor auth turned on:
 
 If cookies expire (password change, new device/IP, etc.), repeat the headful steps above to refresh them.
 
-**Login-only helper (when headless keeps refreshing):** set `LOGIN_ONLY_MODE=true` and `HEADLESS_MODE=false`, then run `python main.py`. It opens a visible browser so you can complete 2FA, saves `instagram_cookies.json`, and exits without scraping. Set `LOGIN_ONLY_MODE` back to false afterward.
+**Login-only helper (when headless keeps refreshing):** set `LOGIN_ONLY_MODE=true` and `HEADLESS_MODE=false`, then run `python main.py`. It opens a visible browser so you can complete 2FA, waits for login to finish, saves `instagram_cookies.json`, and exits without scraping. You can press Enter in the terminal after you finish login/2FA to save cookies, or let it auto-detect the login. Set `LOGIN_ONLY_MODE` back to false afterward. Use `LOGIN_ONLY_TIMEOUT_SECONDS` (optional) to stop waiting after a set time.
 
 **Quick start for 2FA users**
 - Do one visible run (`HEADLESS_MODE=false`, `LOGIN_ONLY_MODE=true`) to generate `instagram_cookies.json`.

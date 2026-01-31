@@ -2,6 +2,8 @@ import os
 import time
 import json
 import random
+import sys
+import threading
 from datetime import datetime
 import pytz
 from dotenv import load_dotenv
@@ -137,7 +139,7 @@ class InstagramTracker:
             
             try:
                 WebDriverWait(self.driver, 15).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, 'svg[aria-label="Instagram"]'))
+                    lambda d: self.is_logged_in()
                 )
                 print("Successfully logged in!")
                 # Save cookies after successful login
@@ -150,6 +152,61 @@ class InstagramTracker:
         except Exception as e:
             print(f"Login failed: {str(e)}")
             return False
+
+    def has_session_cookie(self):
+        try:
+            cookies = self.driver.get_cookies()
+            for cookie in cookies:
+                if cookie.get("name") == "sessionid" and cookie.get("value"):
+                    return True
+            return False
+        except Exception:
+            return False
+
+    def is_logged_in(self):
+        if self.has_session_cookie():
+            return True
+        try:
+            if self.driver.find_elements(By.CSS_SELECTOR, "#loginForm"):
+                return False
+        except Exception:
+            pass
+        try:
+            self.driver.find_element(By.CSS_SELECTOR, "nav")
+            return True
+        except Exception:
+            return False
+
+    def wait_for_login(self, timeout_seconds=None, poll_interval=2, allow_manual_confirm=True):
+        print("Waiting for login to complete. Finish login/2FA in the browser.")
+        manual_event = threading.Event()
+        manual_checked = False
+
+        if allow_manual_confirm and sys.stdin and sys.stdin.isatty():
+            def wait_input():
+                try:
+                    input("Press Enter here after you finish login/2FA to save cookies...")
+                    manual_event.set()
+                except EOFError:
+                    pass
+
+            input_thread = threading.Thread(target=wait_input, daemon=True)
+            input_thread.start()
+
+        start_time = time.time()
+        while True:
+            if self.is_logged_in():
+                return True
+            if manual_event.is_set() and not manual_checked:
+                manual_checked = True
+                if self.has_session_cookie():
+                    print("Manual confirmation received and session cookie detected.")
+                    return True
+                print("Manual confirmation received but login not detected yet; continuing to wait...")
+
+            if timeout_seconds is not None and (time.time() - start_time) > timeout_seconds:
+                return False
+            time.sleep(poll_interval)
     
     def save_cookies(self):
         """Save the current session cookies to a file"""
@@ -429,17 +486,37 @@ def main():
     login_only_mode = os.getenv("LOGIN_ONLY_MODE", "false").lower() == "true"
     interval_minutes = int(os.getenv("RUN_INTERVAL_MINUTES", "60"))
     jitter_seconds = int(os.getenv("RUN_JITTER_SECONDS", "120"))
+    login_only_timeout = os.getenv("LOGIN_ONLY_TIMEOUT_SECONDS")
+    login_only_timeout_seconds = None
+    if login_only_timeout:
+        try:
+            login_only_timeout_seconds = int(login_only_timeout)
+        except ValueError:
+            print("Invalid LOGIN_ONLY_TIMEOUT_SECONDS; ignoring and waiting indefinitely.")
 
     if login_only_mode:
         tracker = InstagramTracker()
         print("LOGIN_ONLY_MODE is enabled; opening a visible browser for manual login/2FA.")
         tracker.setup_driver(headless_override=False)
-        success = tracker.login(skip_cookie_login=True)
-        if success:
-            print("Login-only mode succeeded. Cookies saved to instagram_cookies.json. Exiting.")
-        else:
-            print("Login-only mode failed. Please retry with HEADLESS_MODE=false and correct credentials.")
-        tracker.db.close()
+        try:
+            # Use the normal login flow to submit credentials, then wait for manual completion
+            success = tracker.login(skip_cookie_login=True)
+            if not success:
+                print("Login not confirmed yet. Waiting for manual completion...")
+                success = tracker.wait_for_login(timeout_seconds=login_only_timeout_seconds)
+                if success:
+                    tracker.save_cookies()
+            if success:
+                print("Login-only mode succeeded. Cookies saved to instagram_cookies.json. Exiting.")
+            else:
+                print("Login-only mode timed out. Please retry with HEADLESS_MODE=false and correct credentials.")
+        finally:
+            if tracker.driver:
+                try:
+                    tracker.driver.quit()
+                except Exception:
+                    pass
+            tracker.db.close()
         return
 
     while True:
