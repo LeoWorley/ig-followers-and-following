@@ -131,6 +131,24 @@ After data is collected you can query it with `python report.py`:
 - `python report.py list --type both --out-csv current.csv` (current followers/followings, export optional)
 - Or interactive menu: `python report.py --menu`
 
+### Database export/import (merge)
+
+Use this when you want to move or merge data between machines (e.g., export from macOS and merge into Windows).
+
+Export current DB:
+```bash
+python db_tools.py export
+```
+
+Merge another DB into the local one:
+```bash
+python db_tools.py merge --src /path/to/instagram_tracker.db
+```
+
+Notes:
+- Merge creates a backup of your local DB by default (use `--no-backup` to skip).
+- The merge prefers the earliest "first seen" date and the latest "last seen" date for each username/type.
+
 ### Option 2: Docker
 
 1. Create a `.env` file with your Instagram credentials (same as above).
