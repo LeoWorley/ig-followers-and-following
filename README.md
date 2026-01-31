@@ -71,7 +71,21 @@ If cookies expire (password change, new device/IP, etc.), repeat the headful ste
 - Control frequency with `RUN_INTERVAL_MINUTES` (default 60) and optional `RUN_JITTER_SECONDS` to add a small random delay each cycle.
 - The script now runs in an endless loop; use a process manager (systemd/launchd/supervisor) to keep it alive.
 - **macOS (launchd):** create `~/Library/LaunchAgents/com.instagram.tracker.plist` that runs `cd /Users/<you>/dev/ig-follwers-and-following && source venv/bin/activate && set -a; source .env; set +a; caffeinate -dims python3 main.py >> /tmp/instagram-tracker.log 2>&1`, set `RunAtLoad` and `KeepAlive` to true, then `launchctl load ~/Library/LaunchAgents/com.instagram.tracker.plist`. Keep the lid closed but prevent sleep with `caffeinate -dims` (or `sudo pmset -a disablesleep 1`).
-- **Windows (Task Scheduler):** create a task that runs hourly, even when locked: `powershell -NoProfile -ExecutionPolicy Bypass -Command "cd C:\\path\\to\\ig-follwers-and-following; .\\venv\\Scripts\\Activate.ps1; setx IG_USERNAME '...'; setx IG_PASSWORD '...'; setx TARGET_ACCOUNT '...'; python main.py >> C:\\path\\to\\tracker.log 2>&1"`. Set “Run whether user is logged on or not” and disable sleep in Power Options.
+- **Windows (Task Scheduler, recommended):**
+  1. Open Task Scheduler -> Create Task (not Basic Task).
+  2. General tab: set Run whether user is logged on or not.
+  3. Triggers tab: add your schedule (e.g., every 1 hour).
+  4. Actions tab -> New:
+     - Program/script: `C:\ig-followers-and-following\venv\Scripts\python.exe`
+     - Add arguments: `main.py`
+     - Start in: `C:\ig-followers-and-following`
+  5. Conditions tab: optional, but make sure the PC won't sleep.
+  6. Settings tab: enable Run task as soon as possible after a scheduled start is missed.
+
+  Notes:
+  - Make sure `.env` and `instagram_cookies.json` are in the project folder.
+  - For scheduled runs, use `HEADLESS_MODE=true` and `LOGIN_ONLY_MODE=false`.
+  - If you need 2FA, run one login-only session interactively first: set `LOGIN_ONLY_MODE=true`, `HEADLESS_MODE=false`, run `python main.py` in a normal terminal, complete login, then set `LOGIN_ONLY_MODE=false`.
 
 ### Reporting
 
