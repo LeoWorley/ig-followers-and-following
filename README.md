@@ -10,6 +10,12 @@ Track changes in followers and following over time, store history in SQLite, and
 - GUI and tray monitor apps for non-CLI usage.
 - DB export/merge utilities for moving data across machines.
 
+## Docs map
+
+- `docs/QUICK_START.md` - fastest setup path.
+- `docs/TROUBLESHOOTING.md` - common issues and fixes.
+- `docs/ADVANCED.md` - runtime tuning, db tools, packaging.
+
 ## Quick Start (recommended)
 
 ### Windows
