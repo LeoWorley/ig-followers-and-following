@@ -155,6 +155,7 @@ The GUI is designed for non-technical users:
 - Health indicators:
   - cookie age
   - latest error from log
+  - time since last successful run
 - In-app reports rendered directly (with optional "Save output").
 - Daily compare view from DB (no file export required):
   - per-day followers/followings totals
