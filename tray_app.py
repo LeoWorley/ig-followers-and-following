@@ -24,11 +24,33 @@ REPORT_DAYS = int(os.getenv("TRAY_REPORT_DAYS", "7"))
 POLL_SECONDS = int(os.getenv("TRAY_STATUS_POLL_SECONDS", "5"))
 AUTO_START = os.getenv("TRAY_AUTO_START", "false").lower() == "true"
 MONITOR_ONLY = os.getenv("TRAY_MONITOR_ONLY", "false").lower() == "true"
+AUTO_MONITOR_ON_SCHEDULER = os.getenv("TRAY_AUTO_MONITOR_ON_SCHEDULER", "true").lower() == "true"
 
 _process_lock = threading.Lock()
 _process = None
 _log_handle = None
 _stop_event = threading.Event()
+_runtime_monitor_only = MONITOR_ONLY
+_scheduler_detected = False
+
+
+def _detect_scheduler_tracker():
+    if not sys.platform.startswith("win"):
+        return False
+    try:
+        result = subprocess.run(
+            ["schtasks", "/Query", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=8,
+            check=False,
+        )
+        text = (result.stdout or "").lower()
+        return "main.py" in text or "ig-followers-and-following" in text
+    except Exception:
+        return False
 
 
 def _create_image():
@@ -67,7 +89,7 @@ def _tracker_env(overrides=None):
 
 
 def _start_tracker(_=None):
-    if MONITOR_ONLY:
+    if _runtime_monitor_only:
         return
     global _process, _log_handle
     with _process_lock:
@@ -85,7 +107,7 @@ def _start_tracker(_=None):
 
 
 def _stop_tracker(_=None):
-    if MONITOR_ONLY:
+    if _runtime_monitor_only:
         return
     global _process, _log_handle
     with _process_lock:
@@ -107,7 +129,7 @@ def _stop_tracker(_=None):
 
 
 def _run_login_only(_=None):
-    if MONITOR_ONLY:
+    if _runtime_monitor_only:
         return
     if _is_running():
         return
@@ -206,7 +228,7 @@ def _ensure_reports_dir():
 
 
 def _report_time_range():
-    end = datetime.utcnow().replace(microsecond=0)
+    end = datetime.now(timezone.utc).replace(microsecond=0).replace(tzinfo=None)
     start = (end - timedelta(days=REPORT_DAYS)).replace(microsecond=0)
     return start.isoformat(), end.isoformat()
 
@@ -223,7 +245,7 @@ def _run_report_to_file(args, output_name):
                 stdout=handle,
                 stderr=handle,
             )
-        os.startfile(str(output_path))
+        _open_path(output_path)
 
     threading.Thread(target=_worker, daemon=True).start()
 
@@ -237,7 +259,7 @@ def _run_report_list_csv(list_type):
             cwd=str(ROOT_DIR),
             env=_tracker_env(),
         )
-        os.startfile(str(output_path))
+        _open_path(output_path)
 
     threading.Thread(target=_worker, daemon=True).start()
 
@@ -275,7 +297,7 @@ def _report_lost(_=None):
 
 
 def _report_snapshot(_=None):
-    at = datetime.utcnow().replace(microsecond=0).isoformat()
+    at = datetime.now(timezone.utc).replace(microsecond=0).replace(tzinfo=None).isoformat()
     _run_report_to_file(["snapshot", "--at", at, "--type", "both"], "snapshot_now.txt")
 
 
@@ -308,10 +330,43 @@ def _open_reports_folder(_=None):
     _open_path(REPORTS_DIR)
 
 
+def _cookie_status():
+    cookie_file = ROOT_DIR / "instagram_cookies.json"
+    if not cookie_file.exists():
+        return "cookie:missing"
+    age_hours = (time.time() - cookie_file.stat().st_mtime) / 3600.0
+    if age_hours < 24:
+        return f"cookie:{age_hours:.1f}h"
+    return f"cookie:{age_hours / 24.0:.1f}d"
+
+
+def _last_error_short():
+    if not LOG_PATH.exists():
+        return "err:none"
+    try:
+        with open(LOG_PATH, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - 16384), os.SEEK_SET)
+            text = handle.read().decode("utf-8", errors="replace")
+        for line in reversed([line.strip() for line in text.splitlines() if line.strip()]):
+            if "[ERROR]" in line:
+                return "err:yes"
+    except Exception:
+        pass
+    return "err:none"
+
+
 def _status_title():
     running = _is_running()
     last_run = _read_last_run()
-    title = f"{APP_TITLE}: {'Running' if running else 'Stopped'}"
+    mode = "monitor" if _runtime_monitor_only else "control"
+    if _runtime_monitor_only and _scheduler_detected:
+        state = "External"
+    else:
+        state = "Running" if running else "Stopped"
+    title = f"{APP_TITLE}: {state} ({mode})"
+    title = f"{title} | {_cookie_status()} | {_last_error_short()}"
     if last_run:
         when = _format_dt(last_run.get("finished_at") or last_run.get("started_at"))
         status = last_run.get("status") or "unknown"
@@ -347,9 +402,9 @@ def _menu():
         pystray.MenuItem("Open reports folder", _open_reports_folder),
     )
     return pystray.Menu(
-        pystray.MenuItem("Start tracker", _start_tracker, enabled=lambda _: (not MONITOR_ONLY and not _is_running())),
-        pystray.MenuItem("Stop tracker", _stop_tracker, enabled=lambda _: (not MONITOR_ONLY and _is_running())),
-        pystray.MenuItem("Login-only (visible browser)", _run_login_only, enabled=lambda _: (not MONITOR_ONLY and not _is_running())),
+        pystray.MenuItem("Start tracker", _start_tracker, enabled=lambda _: (not _runtime_monitor_only and not _is_running())),
+        pystray.MenuItem("Stop tracker", _stop_tracker, enabled=lambda _: (not _runtime_monitor_only and _is_running())),
+        pystray.MenuItem("Login-only (visible browser)", _run_login_only, enabled=lambda _: (not _runtime_monitor_only and not _is_running())),
         pystray.MenuItem("Reports", reports_menu),
         pystray.MenuItem("Open log", _open_log),
         pystray.MenuItem("Open folder", _open_folder),
@@ -358,9 +413,14 @@ def _menu():
 
 
 def main():
+    global _runtime_monitor_only, _scheduler_detected
+    _scheduler_detected = _detect_scheduler_tracker()
+    if AUTO_MONITOR_ON_SCHEDULER and _scheduler_detected:
+        _runtime_monitor_only = True
+
     icon = pystray.Icon("ig-tracker", _create_image(), APP_TITLE, menu=_menu())
     threading.Thread(target=_update_loop, args=(icon,), daemon=True).start()
-    if AUTO_START and not MONITOR_ONLY:
+    if AUTO_START and not _runtime_monitor_only:
         _start_tracker()
     icon.run()
 
