@@ -95,6 +95,12 @@ The script waits for successful login, saves `instagram_cookies.json`, and exits
   - `LOG_CONSOLE=true`
 - Optional Chrome process cleanup after each run:
   - `FORCE_KILL_CHROME=true`
+- Optional alerting:
+  - `ALERTS_ENABLED=true`
+  - `ALERT_CHANNELS=webhook,desktop`
+  - `ALERT_WEBHOOK_URL=https://your-endpoint.example/alerts`
+  - `ALERT_COOLDOWN_SECONDS=1800`
+  - `ALERT_ON_SUCCESS=false`
 
 ## Background Service Setup
 
@@ -163,6 +169,8 @@ Examples:
 python report.py summary --days 7
 python report.py daily --days 7
 python report.py day --date 2026-01-31
+python report.py --tz UTC day --date 2026-01-31
+python report.py --tz America/New_York summary --days 7
 python report.py new --from 2026-01-01T00:00:00 --to 2026-01-07T23:59:59 --type both
 python report.py lost --from 2026-01-01T00:00:00 --to 2026-01-07T23:59:59 --type both
 python report.py snapshot --at 2026-01-23T12:00:00 --type both
@@ -195,6 +203,11 @@ python db_tools.py cleanup-targets --dest instagram_tracker.db
 Cleanup invalid targets (apply):
 ```bash
 python db_tools.py cleanup-targets --dest instagram_tracker.db --apply
+```
+
+Custom target cleanup list:
+```bash
+python db_tools.py cleanup-targets --dest instagram_tracker.db --usernames followers following bogus_target --apply
 ```
 
 ## Environment Template
