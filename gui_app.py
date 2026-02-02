@@ -38,6 +38,10 @@ _process = None
 _log_handle = None
 
 
+def _utcnow_naive():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def _tracker_env(overrides=None):
     env = os.environ.copy()
     env.setdefault("LOG_FILE", str(LOG_PATH))
@@ -205,13 +209,13 @@ def _read_last_run():
 
 
 def _report_time_range(days: int):
-    end = datetime.utcnow().replace(microsecond=0)
+    end = _utcnow_naive().replace(microsecond=0)
     start = (end - timedelta(days=days)).replace(microsecond=0)
     return start.isoformat(), end.isoformat()
 
 
 def _timestamp():
-    return datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    return _utcnow_naive().strftime("%Y%m%d_%H%M%S")
 
 
 def _run_report_to_file(args, output_name, message_cb=None):
@@ -303,11 +307,14 @@ class TrackerGUI:
 
         self.list_type_var = tk.StringVar(value="both")
         self.list_target_var = tk.StringVar(value="")
+        self.daily_target_var = tk.StringVar(value="(all)")
+        self.daily_type_var = tk.StringVar(value="both")
 
         self._load_available_dates()
         self._last_options_refresh = time.time()
         self._build_ui()
         self._run_wizard_checks()
+        self._load_daily_compare(show_message=False)
         self._update_status()
         if AUTO_START and not MONITOR_ONLY:
             _start_tracker()
@@ -398,6 +405,13 @@ class TrackerGUI:
         ttk.Button(list_frame, text="Export CSV", command=self._list_csv).pack(side="left", padx=4)
         ttk.Button(list_frame, text="Export JSON", command=self._list_json).pack(side="left", padx=4)
 
+        db_tools_frame = ttk.LabelFrame(self.root, text="DB tools")
+        db_tools_frame.pack(fill="x", **padding)
+        ttk.Button(db_tools_frame, text="Preview merge from DB...", command=self._db_preview_merge).pack(side="left", padx=4, pady=4)
+        ttk.Button(db_tools_frame, text="Merge from DB...", command=self._db_apply_merge).pack(side="left", padx=4, pady=4)
+        ttk.Button(db_tools_frame, text="Preview cleanup targets", command=self._db_cleanup_preview).pack(side="left", padx=4, pady=4)
+        ttk.Button(db_tools_frame, text="Apply cleanup targets", command=self._db_cleanup_apply).pack(side="left", padx=4, pady=4)
+
         range_frame = ttk.LabelFrame(self.root, text="New/Lost in range (UTC)")
         range_frame.pack(fill="x", **padding)
         ttk.Label(range_frame, text="From (date):").pack(side="left", padx=4)
@@ -458,6 +472,76 @@ class TrackerGUI:
         )
         self.day_target_cb.pack(side="left")
         ttk.Button(day_frame, text="Run day details", command=self._day_details).pack(side="left", padx=4)
+
+        daily_frame = ttk.LabelFrame(self.root, text="Daily compare (DB live)")
+        daily_frame.pack(fill="both", expand=False, **padding)
+
+        daily_controls = ttk.Frame(daily_frame)
+        daily_controls.pack(fill="x", padx=6, pady=(6, 4))
+        ttk.Label(daily_controls, text="Target:").pack(side="left", padx=4)
+        self.daily_target_cb = ttk.Combobox(
+            daily_controls,
+            textvariable=self.daily_target_var,
+            values=self.available_targets,
+            width=18,
+            state="readonly",
+        )
+        self.daily_target_cb.pack(side="left")
+        ttk.Label(daily_controls, text="Type:").pack(side="left", padx=6)
+        ttk.Combobox(
+            daily_controls,
+            textvariable=self.daily_type_var,
+            values=["both", "followers", "followings"],
+            width=12,
+            state="readonly",
+        ).pack(side="left")
+        ttk.Button(daily_controls, text="Load daily table", command=self._load_daily_compare).pack(side="left", padx=8)
+        ttk.Button(daily_controls, text="Load selected day details", command=self._load_selected_day_details).pack(side="left", padx=4)
+
+        daily_table_frame = ttk.Frame(daily_frame)
+        daily_table_frame.pack(fill="both", padx=6, pady=(0, 4))
+        self.daily_tree = ttk.Treeview(
+            daily_table_frame,
+            columns=("day", "followers", "followings", "d_followers", "d_followings"),
+            show="headings",
+            height=6,
+        )
+        for col, label, width in [
+            ("day", "Day", 100),
+            ("followers", "Followers", 90),
+            ("followings", "Followings", 90),
+            ("d_followers", "Delta followers", 110),
+            ("d_followings", "Delta followings", 115),
+        ]:
+            self.daily_tree.heading(col, text=label)
+            self.daily_tree.column(col, width=width, anchor="center")
+        self.daily_tree.pack(fill="x")
+        self.daily_tree.bind("<<TreeviewSelect>>", lambda _e: self._on_daily_select())
+
+        daily_detail_frame = ttk.Frame(daily_frame)
+        daily_detail_frame.pack(fill="both", padx=6, pady=(0, 6))
+
+        new_box = ttk.LabelFrame(daily_detail_frame, text="New on selected day")
+        new_box.pack(side="left", fill="both", expand=True, padx=(0, 4))
+        self.daily_new_tree = ttk.Treeview(new_box, columns=("type", "username", "at"), show="headings", height=6)
+        self.daily_new_tree.heading("type", text="Type")
+        self.daily_new_tree.heading("username", text="Username")
+        self.daily_new_tree.heading("at", text="Seen at (UTC)")
+        self.daily_new_tree.column("type", width=75, anchor="center")
+        self.daily_new_tree.column("username", width=160, anchor="w")
+        self.daily_new_tree.column("at", width=145, anchor="center")
+        self.daily_new_tree.pack(fill="both", expand=True)
+
+        lost_box = ttk.LabelFrame(daily_detail_frame, text="Lost on selected day")
+        lost_box.pack(side="left", fill="both", expand=True, padx=(4, 0))
+        self.daily_lost_tree = ttk.Treeview(lost_box, columns=("type", "username", "at"), show="headings", height=6)
+        self.daily_lost_tree.heading("type", text="Type")
+        self.daily_lost_tree.heading("username", text="Username")
+        self.daily_lost_tree.heading("at", text="Lost at (UTC)")
+        self.daily_lost_tree.column("type", width=75, anchor="center")
+        self.daily_lost_tree.column("username", width=160, anchor="w")
+        self.daily_lost_tree.column("at", width=145, anchor="center")
+        self.daily_lost_tree.pack(fill="both", expand=True)
 
         snap_frame = ttk.LabelFrame(self.root, text="Snapshot at time (UTC)")
         snap_frame.pack(fill="x", **padding)
@@ -718,7 +802,7 @@ class TrackerGUI:
         else:
             targets = [""] + targets
         if not run_times:
-            run_times = [datetime.utcnow().replace(microsecond=0).isoformat()]
+            run_times = [_utcnow_naive().replace(microsecond=0).isoformat()]
 
         self.available_dates = dates
         self.available_targets = targets
@@ -749,9 +833,15 @@ class TrackerGUI:
             self.snapshot_target_cb.configure(values=self.available_targets)
         if hasattr(self, "list_target_cb"):
             self.list_target_cb.configure(values=self.available_targets)
+        if hasattr(self, "daily_target_cb"):
+            daily_values = ["(all)"] + [value for value in self.available_targets if value]
+            self.daily_target_cb.configure(values=daily_values)
+            if not self.daily_target_var.get():
+                self.daily_target_var.set("(all)")
 
     def _refresh_dates_clicked(self):
         self._load_available_dates()
+        self._load_daily_compare(show_message=False)
         self._set_message("Options refreshed from DB.")
 
     def _open_calendar(self, title, initial_date, on_select):
@@ -827,6 +917,7 @@ class TrackerGUI:
         _cleanup_process_if_needed()
         if time.time() - self._last_options_refresh >= OPTIONS_POLL_SECONDS:
             self._load_available_dates()
+            self._load_daily_compare(show_message=False)
             self._last_options_refresh = time.time()
         self.cookie_status_var.set(self._cookie_health_text())
         self.error_status_var.set(self._last_error_text())
@@ -862,6 +953,265 @@ class TrackerGUI:
         _run_login_only()
         self._set_message("Login-only started (visible browser).")
 
+    def _clear_tree(self, tree):
+        for row in tree.get_children():
+            tree.delete(row)
+
+    def _query_daily_rows(self, target_name):
+        if not DB_PATH.exists():
+            return []
+        conn = sqlite3.connect(str(DB_PATH), timeout=2)
+        try:
+            rows = conn.execute(
+                """
+                WITH filtered AS (
+                    SELECT substr(c.timestamp, 1, 10) AS day, c.count_type, c.count, c.timestamp
+                    FROM counts c
+                    JOIN targets t ON t.id = c.target_id
+                    WHERE (? = '' OR t.username = ?)
+                ),
+                latest AS (
+                    SELECT day, count_type, MAX(timestamp) AS max_ts
+                    FROM filtered
+                    GROUP BY day, count_type
+                )
+                SELECT f.day, f.count_type, f.count
+                FROM filtered f
+                JOIN latest l
+                  ON l.day = f.day
+                 AND l.count_type = f.count_type
+                 AND l.max_ts = f.timestamp
+                ORDER BY f.day ASC
+                """,
+                (target_name, target_name),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        daily = {}
+        for day, count_type, count in rows:
+            entry = daily.setdefault(day, {"followers": None, "followings": None})
+            if count_type == "followers":
+                entry["followers"] = count
+            elif count_type == "followings":
+                entry["followings"] = count
+
+        ordered_days = sorted(daily.keys())
+        result = []
+        prev_followers = None
+        prev_followings = None
+        for day in ordered_days:
+            followers = daily[day]["followers"]
+            followings = daily[day]["followings"]
+            d_followers = None
+            d_followings = None
+            if prev_followers is not None and followers is not None:
+                d_followers = followers - prev_followers
+            if prev_followings is not None and followings is not None:
+                d_followings = followings - prev_followings
+            prev_followers = followers if followers is not None else prev_followers
+            prev_followings = followings if followings is not None else prev_followings
+            result.append(
+                {
+                    "day": day,
+                    "followers": followers,
+                    "followings": followings,
+                    "d_followers": d_followers,
+                    "d_followings": d_followings,
+                }
+            )
+
+        days_limit = self._get_days()
+        if days_limit > 0:
+            result = result[-days_limit:]
+        result.reverse()
+        return result
+
+    def _query_day_changes(self, day_str, target_name, list_type, event_type):
+        if not DB_PATH.exists():
+            return []
+        start_dt = f"{day_str}T00:00:00"
+        end_dt = f"{day_str}T23:59:59.999999"
+        ts_col = "first_seen_run_at" if event_type == "new" else "lost_at_run_at"
+        type_sql = ""
+        if list_type == "followers":
+            type_sql = " AND ff.is_follower = 1"
+        elif list_type == "followings":
+            type_sql = " AND ff.is_follower = 0"
+
+        conn = sqlite3.connect(str(DB_PATH), timeout=2)
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT ff.follower_following_username, ff.is_follower, ff.{ts_col}
+                FROM followers_followings ff
+                JOIN targets t ON t.id = ff.target_id
+                WHERE ff.{ts_col} IS NOT NULL
+                  AND ff.{ts_col} >= ?
+                  AND ff.{ts_col} <= ?
+                  AND (? = '' OR t.username = ?)
+                  {type_sql}
+                ORDER BY ff.{ts_col} ASC, ff.follower_following_username ASC
+                """,
+                (start_dt, end_dt, target_name, target_name),
+            ).fetchall()
+        finally:
+            conn.close()
+        return rows
+
+    def _load_daily_compare(self, show_message=True):
+        self._clear_tree(self.daily_tree)
+        self._clear_tree(self.daily_new_tree)
+        self._clear_tree(self.daily_lost_tree)
+        target_name = (self.daily_target_var.get() or "").strip()
+        if target_name == "(all)":
+            target_name = ""
+        try:
+            rows = self._query_daily_rows(target_name)
+        except Exception as e:
+            self._set_message(f"Daily compare failed: {e}")
+            return
+        if not rows:
+            if show_message:
+                self._set_message("No daily counts found in DB.")
+            return
+
+        for row in rows:
+            followers = "-" if row["followers"] is None else str(row["followers"])
+            followings = "-" if row["followings"] is None else str(row["followings"])
+            d_followers = "-" if row["d_followers"] is None else f"{row['d_followers']:+d}"
+            d_followings = "-" if row["d_followings"] is None else f"{row['d_followings']:+d}"
+            self.daily_tree.insert(
+                "",
+                "end",
+                values=(row["day"], followers, followings, d_followers, d_followings),
+            )
+
+        first_item = self.daily_tree.get_children()
+        if first_item:
+            self.daily_tree.selection_set(first_item[0])
+            self._load_selected_day_details()
+        if show_message:
+            self._set_message("Daily compare loaded from DB.")
+
+    def _selected_daily_day(self):
+        selected = self.daily_tree.selection()
+        if not selected:
+            return None
+        values = self.daily_tree.item(selected[0], "values")
+        if not values:
+            return None
+        return str(values[0])
+
+    def _on_daily_select(self):
+        day = self._selected_daily_day()
+        if day:
+            self.day_var.set(day)
+            self._load_selected_day_details()
+
+    def _load_selected_day_details(self):
+        day = self._selected_daily_day()
+        if not day:
+            self._set_message("Select a day from Daily compare first.")
+            return
+        target_name = (self.daily_target_var.get() or "").strip()
+        if target_name == "(all)":
+            target_name = ""
+        list_type = self.daily_type_var.get() or "both"
+        try:
+            new_rows = self._query_day_changes(day, target_name, list_type, "new")
+            lost_rows = self._query_day_changes(day, target_name, list_type, "lost")
+        except Exception as e:
+            self._set_message(f"Day detail query failed: {e}")
+            return
+
+        self._clear_tree(self.daily_new_tree)
+        self._clear_tree(self.daily_lost_tree)
+
+        for username, is_follower, ts in new_rows:
+            ff_type = "follower" if int(is_follower) == 1 else "following"
+            self.daily_new_tree.insert("", "end", values=(ff_type, username, str(ts)))
+        for username, is_follower, ts in lost_rows:
+            ff_type = "follower" if int(is_follower) == 1 else "following"
+            self.daily_lost_tree.insert("", "end", values=(ff_type, username, str(ts)))
+
+        self._set_message(f"Day {day}: {len(new_rows)} new, {len(lost_rows)} lost.")
+
+    def _run_db_tool(self, args, title, on_success=None):
+        self._set_message("Running DB tool...")
+
+        def _worker():
+            result = subprocess.run(
+                [sys.executable, "-u", "db_tools.py", *args],
+                cwd=str(ROOT_DIR),
+                env=_tracker_env(),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            output = (result.stdout or "").strip()
+            if result.stderr:
+                output += ("\n\n[stderr]\n" + result.stderr.strip())
+            if not output:
+                output = "(no output)"
+            header = f"{title} ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})\n"
+            text_out = header + ("-" * len(header)) + "\n" + output + "\n"
+
+            def _update():
+                self._set_output(text_out)
+                if result.returncode == 0:
+                    self._set_message("DB tool completed.")
+                    self._load_available_dates()
+                    self._load_daily_compare(show_message=False)
+                    if on_success:
+                        on_success()
+                else:
+                    self._set_message(f"DB tool failed with code {result.returncode}.")
+
+            self.root.after(0, _update)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _select_source_db(self):
+        return filedialog.askopenfilename(
+            title="Select source DB to merge",
+            filetypes=[("SQLite DB", "*.db"), ("All files", "*.*")],
+            initialdir=str(ROOT_DIR),
+        )
+
+    def _db_preview_merge(self):
+        src = self._select_source_db()
+        if not src:
+            self._set_message("Merge preview cancelled.")
+            return
+        self._run_db_tool(
+            ["preview-merge", "--src", src, "--dest", str(DB_PATH)],
+            "DB merge preview",
+        )
+
+    def _db_apply_merge(self):
+        src = self._select_source_db()
+        if not src:
+            self._set_message("Merge cancelled.")
+            return
+        self._run_db_tool(
+            ["merge", "--src", src, "--dest", str(DB_PATH)],
+            "DB merge apply",
+        )
+
+    def _db_cleanup_preview(self):
+        self._run_db_tool(
+            ["cleanup-targets", "--dest", str(DB_PATH)],
+            "Cleanup targets preview",
+        )
+
+    def _db_cleanup_apply(self):
+        self._run_db_tool(
+            ["cleanup-targets", "--dest", str(DB_PATH), "--apply"],
+            "Cleanup targets apply",
+        )
+
     def _summary_report(self):
         days = self._get_days()
         self._run_report_to_text(["summary", "--days", str(days)], f"Summary last {days} days")
@@ -887,7 +1237,7 @@ class TrackerGUI:
         self._run_report_to_text(["daily", "--days", str(days)], f"Daily counts last {days} days")
 
     def _snapshot_now(self):
-        at = datetime.utcnow().replace(microsecond=0).isoformat()
+        at = _utcnow_naive().replace(microsecond=0).isoformat()
         self._run_report_to_text(["snapshot", "--at", at, "--type", "both"], "Snapshot now")
 
     def _list_csv(self):
