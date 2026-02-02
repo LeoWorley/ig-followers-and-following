@@ -34,9 +34,7 @@ TARGET_ACCOUNT=account_to_track
 
 3. First-time login/2FA cookie capture:
 ```powershell
-$env:LOGIN_ONLY_MODE="true"
-$env:HEADLESS_MODE="false"
-.\venv\Scripts\python.exe .\main.py
+.\login_once.ps1
 ```
 
 4. Set back to normal mode in `.env`:
@@ -60,7 +58,7 @@ HEADLESS_MODE=true
 2. Edit `.env` (same keys as Windows).
 3. Run login-only once:
 ```bash
-LOGIN_ONLY_MODE=true HEADLESS_MODE=false ./venv/bin/python main.py
+./login_once.sh
 ```
 4. Return to normal mode in `.env` (`LOGIN_ONLY_MODE=false`, `HEADLESS_MODE=true`).
 5. Start GUI:

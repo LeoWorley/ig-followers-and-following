@@ -16,9 +16,7 @@ TARGET_ACCOUNT=account_to_track
 
 3) First-time login/cookie capture:
 ```powershell
-$env:LOGIN_ONLY_MODE="true"
-$env:HEADLESS_MODE="false"
-.\venv\Scripts\python.exe .\main.py
+.\login_once.ps1
 ```
 
 4) Return to normal mode in `.env`:
@@ -44,7 +42,7 @@ HEADLESS_MODE=true
 
 3) First-time login:
 ```bash
-LOGIN_ONLY_MODE=true HEADLESS_MODE=false ./venv/bin/python main.py
+./login_once.sh
 ```
 
 4) Return to normal mode (`LOGIN_ONLY_MODE=false`, `HEADLESS_MODE=true`).
