@@ -74,6 +74,9 @@ LOGIN_ONLY_MODE=true HEADLESS_MODE=false ./venv/bin/python main.py
   - `SCRAPE_MODAL_WAIT_SECONDS` (default 10)
   - `SCRAPE_STALL_TIMEOUT_SECONDS` (default 15)
   - `SCRAPE_MAX_ITERATIONS` (default 500)
+- Optional SQLite maintenance:
+  - `DB_INTEGRITY_CHECK_EVERY_RUNS` (0 disables)
+  - `DB_VACUUM_EVERY_RUNS` (0 disables)
 - Uses a single-instance lock to avoid accidental parallel runs:
   - `LOCK_FILE` (default `tracker.lock`)
   - `DISABLE_RUN_LOCK` (default `false`)
