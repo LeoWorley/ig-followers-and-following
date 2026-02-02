@@ -4,6 +4,7 @@ import time
 import sqlite3
 import threading
 import subprocess
+import importlib.util
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -30,6 +31,7 @@ POLL_SECONDS = int(os.getenv("GUI_STATUS_POLL_SECONDS") or os.getenv("TRAY_STATU
 OPTIONS_POLL_SECONDS = int(os.getenv("GUI_OPTIONS_POLL_SECONDS", "30"))
 AUTO_START = os.getenv("GUI_AUTO_START", "false").lower() == "true"
 MONITOR_ONLY = os.getenv("GUI_MONITOR_ONLY", os.getenv("TRAY_MONITOR_ONLY", "false")).lower() == "true"
+REQUIRED_ENV_KEYS = ("IG_USERNAME", "IG_PASSWORD", "TARGET_ACCOUNT")
 
 _process_lock = threading.Lock()
 _process = None
@@ -276,6 +278,7 @@ class TrackerGUI:
         self.status_var = tk.StringVar(value="Status: unknown")
         self.message_var = tk.StringVar(value="")
         self.last_output = ""
+        self.wizard_summary_var = tk.StringVar(value="Run checks to verify first-time setup.")
 
         self.available_dates = []
         self.available_targets = []
@@ -300,6 +303,7 @@ class TrackerGUI:
         self._load_available_dates()
         self._last_options_refresh = time.time()
         self._build_ui()
+        self._run_wizard_checks()
         self._update_status()
         if AUTO_START and not MONITOR_ONLY:
             _start_tracker()
@@ -331,6 +335,29 @@ class TrackerGUI:
             start_btn.configure(state="disabled")
             stop_btn.configure(state="disabled")
             login_btn.configure(state="disabled")
+
+        wizard_frame = ttk.LabelFrame(self.root, text="First-run wizard")
+        wizard_frame.pack(fill="x", **padding)
+        wizard_controls = ttk.Frame(wizard_frame)
+        wizard_controls.pack(fill="x", padx=4, pady=4)
+        ttk.Button(wizard_controls, text="Run setup checks", command=self._run_wizard_checks).pack(side="left", padx=4)
+        ttk.Button(wizard_controls, text="Open .env", command=self._open_env_file).pack(side="left", padx=4)
+        ttk.Button(wizard_controls, text="Run login-only now", command=self._login_only_clicked).pack(side="left", padx=4)
+        ttk.Label(wizard_frame, textvariable=self.wizard_summary_var).pack(anchor="w", padx=8, pady=(0, 4))
+
+        self.wizard_tree = ttk.Treeview(
+            wizard_frame,
+            columns=("check", "status", "details"),
+            show="headings",
+            height=5,
+        )
+        self.wizard_tree.heading("check", text="Check")
+        self.wizard_tree.heading("status", text="Status")
+        self.wizard_tree.heading("details", text="Details")
+        self.wizard_tree.column("check", width=170, anchor="w")
+        self.wizard_tree.column("status", width=80, anchor="center")
+        self.wizard_tree.column("details", width=660, anchor="w")
+        self.wizard_tree.pack(fill="x", padx=6, pady=(0, 6))
 
         quick_frame = ttk.LabelFrame(self.root, text="Quick reports")
         quick_frame.pack(fill="x", **padding)
@@ -473,6 +500,98 @@ class TrackerGUI:
 
     def _set_message(self, text):
         self.message_var.set(text)
+
+    def _open_env_file(self):
+        _open_path(ENV_PATH)
+
+    def _env_value_configured(self, key):
+        value = (os.getenv(key, "") or "").strip()
+        if not value:
+            return False
+        if value.lower().startswith("your_"):
+            return False
+        if value in {"account_to_track", "your_username", "your_password"}:
+            return False
+        return True
+
+    def _run_wizard_checks(self):
+        checks = []
+
+        env_exists = ENV_PATH.exists()
+        checks.append(("Env file", "PASS" if env_exists else "FAIL", str(ENV_PATH)))
+
+        missing_keys = [k for k in REQUIRED_ENV_KEYS if not self._env_value_configured(k)]
+        if missing_keys:
+            checks.append(("Required config", "FAIL", f"Missing/placeholder: {', '.join(missing_keys)}"))
+        else:
+            checks.append(("Required config", "PASS", "IG_USERNAME / IG_PASSWORD / TARGET_ACCOUNT configured"))
+
+        has_selenium = importlib.util.find_spec("selenium") is not None
+        has_wdm = importlib.util.find_spec("webdriver_manager") is not None
+        dep_ok = has_selenium and has_wdm
+        checks.append(("Dependencies", "PASS" if dep_ok else "FAIL", "selenium + webdriver_manager"))
+
+        cookie_ok = (ROOT_DIR / "instagram_cookies.json").exists() and (ROOT_DIR / "instagram_cookies.json").stat().st_size > 10
+        checks.append(("Cookie file", "PASS" if cookie_ok else "WARN", "Run login-only once if missing"))
+
+        db_exists = DB_PATH.exists()
+        run_count = 0
+        if db_exists:
+            try:
+                conn = sqlite3.connect(str(DB_PATH), timeout=1)
+                try:
+                    run_count = conn.execute("SELECT COUNT(1) FROM run_history").fetchone()[0]
+                finally:
+                    conn.close()
+            except Exception:
+                pass
+        checks.append(("Database", "PASS" if db_exists else "WARN", f"{DB_PATH} | runs: {run_count}"))
+
+        task_detected = False
+        task_note = "Not detected"
+        if sys.platform.startswith("win"):
+            try:
+                result = subprocess.run(
+                    ["schtasks", "/Query", "/FO", "CSV", "/NH"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=8,
+                )
+                text = (result.stdout or "").lower()
+                if "main.py" in text or "ig-followers-and-following" in text:
+                    task_detected = True
+                    task_note = "Task Scheduler entry detected"
+            except Exception:
+                task_note = "Could not query Task Scheduler"
+        checks.append(("Scheduler", "PASS" if task_detected else "WARN", task_note))
+
+        if task_detected and not MONITOR_ONLY:
+            checks.append(("Monitor-only mode", "WARN", "Set GUI_MONITOR_ONLY=true to avoid double runs"))
+        else:
+            checks.append(("Monitor-only mode", "PASS", "Current mode is safe"))
+
+        self._render_wizard_checks(checks)
+
+    def _render_wizard_checks(self, checks):
+        for row in self.wizard_tree.get_children():
+            self.wizard_tree.delete(row)
+        fail_count = 0
+        warn_count = 0
+        for check_name, status, details in checks:
+            if status == "FAIL":
+                fail_count += 1
+            elif status == "WARN":
+                warn_count += 1
+            self.wizard_tree.insert("", "end", values=(check_name, status, details))
+
+        if fail_count:
+            self.wizard_summary_var.set(f"{fail_count} check(s) failed, {warn_count} warning(s). Fix failures first.")
+        elif warn_count:
+            self.wizard_summary_var.set(f"All required checks passed with {warn_count} warning(s).")
+        else:
+            self.wizard_summary_var.set("All checks passed. Tracker is ready.")
 
     def _set_output(self, text):
         self.last_output = text
