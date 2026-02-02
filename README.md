@@ -158,8 +158,7 @@ The GUI is designed for non-technical users:
   - time since last successful run
 - In-app reports rendered directly (with optional "Save output").
 - Daily compare view from DB (no file export required):
-  - per-day followers/followings totals
-  - per-day deltas
+  - per-day new/lost counts (followers + followings)
   - selectable day details showing new/lost usernames
   - export selected day details to CSV
 - DB tools in GUI:
