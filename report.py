@@ -1,6 +1,7 @@
 import argparse
-from datetime import datetime, timedelta, date, time as dt_time
+from datetime import datetime, timedelta, date, time as dt_time, timezone
 from typing import Optional, List, Tuple, Dict
+from zoneinfo import ZoneInfo
 
 import pytz
 from rich.console import Console
@@ -15,12 +16,39 @@ from database import Database, FollowerFollowing, Target, RunHistory, Counts
 console = Console()
 
 
+def _resolve_tz(tz_name: Optional[str]):
+    tz_value = (tz_name or "local").strip().lower()
+    if tz_value in {"", "local"}:
+        return datetime.now().astimezone().tzinfo
+    if tz_value == "utc":
+        return timezone.utc
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        console.print(f"[yellow]Unknown timezone '{tz_name}', using local time.[/yellow]")
+        return datetime.now().astimezone().tzinfo
+
+
+def format_ts(ts, tz_name: Optional[str]):
+    if ts is None:
+        return "-"
+    dt = ts if isinstance(ts, datetime) else datetime.fromisoformat(str(ts))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    tz = _resolve_tz(tz_name)
+    return dt.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def parse_iso(dt_str: str) -> datetime:
     return datetime.fromisoformat(dt_str)
 
 
+def utcnow_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def resolve_time(ts: Optional[str]) -> datetime:
-    return parse_iso(ts) if ts else datetime.utcnow()
+    return parse_iso(ts) if ts else utcnow_naive()
 
 
 def resolve_range(from_date: Optional[str], to_date: Optional[str], days: Optional[int]) -> Tuple[datetime, datetime]:
@@ -28,7 +56,7 @@ def resolve_range(from_date: Optional[str], to_date: Optional[str], days: Option
         return parse_iso(from_date), parse_iso(to_date)
     if days is None:
         days = 7
-    end = datetime.utcnow()
+    end = utcnow_naive()
     start = end - timedelta(days=days)
     return start, end
 
@@ -78,8 +106,8 @@ def cmd_list_current(db: Database, args):
         r = [target,
              ff.follower_following_username,
              "follower" if ff.is_follower else "following",
-             ff.first_seen_run_at,
-             ff.last_seen_run_at]
+             format_ts(ff.first_seen_run_at, args.tz),
+             format_ts(ff.last_seen_run_at, args.tz)]
         table.add_row(*(str(x) for x in r))
         export_rows.append(r)
     console.print(table)
@@ -108,7 +136,7 @@ def cmd_new(db: Database, args):
     table = build_table("New followers/followings", ["target", "username", "type", "first_seen_run_at", "estimated_added_at"])
     for ff, target in rows:
         table.add_row(target, ff.follower_following_username, "follower" if ff.is_follower else "following",
-                      str(ff.first_seen_run_at), str(ff.estimated_added_at or "-"))
+                      format_ts(ff.first_seen_run_at, args.tz), format_ts(ff.estimated_added_at, args.tz))
     console.print(table)
 
 
@@ -126,12 +154,12 @@ def cmd_lost(db: Database, args):
     table = build_table("Lost followers/followings", ["target", "username", "type", "lost_at_run_at", "estimated_removed_at"])
     for ff, target in rows:
         table.add_row(target, ff.follower_following_username, "follower" if ff.is_follower else "following",
-                      str(ff.lost_at_run_at), str(ff.estimated_removed_at or "-"))
+                      format_ts(ff.lost_at_run_at, args.tz), format_ts(ff.estimated_removed_at, args.tz))
     console.print(table)
 
 
 def cmd_snapshot(db: Database, args):
-    at_time = parse_iso(args.at) if args.at else datetime.utcnow()
+    at_time = parse_iso(args.at) if args.at else utcnow_naive()
     q = db.session.query(FollowerFollowing, Target.username.label("target"))\
         .join(Target, Target.id == FollowerFollowing.target_id)
     q = filter_type(q, args.type)
@@ -143,13 +171,13 @@ def cmd_snapshot(db: Database, args):
     table = build_table(f"Snapshot @ {at_time.isoformat()}", ["target", "username", "type", "first_seen_run_at", "last_seen_run_at"])
     for ff, target in rows:
         table.add_row(target, ff.follower_following_username, "follower" if ff.is_follower else "following",
-                      str(ff.first_seen_run_at), str(ff.last_seen_run_at))
+                      format_ts(ff.first_seen_run_at, args.tz), format_ts(ff.last_seen_run_at, args.tz))
     console.print(table)
 
 
 def cmd_summary(db: Database, args):
     days = args.days
-    end = datetime.utcnow()
+    end = utcnow_naive()
     start = end - timedelta(days=days)
     q_new = db.session.query(FollowerFollowing.first_seen_run_at, FollowerFollowing.is_follower)
     q_lost = db.session.query(FollowerFollowing.lost_at_run_at, FollowerFollowing.is_follower)
@@ -268,6 +296,7 @@ def cmd_day_details(db: Database, args):
         to_date=end.isoformat(),
         days=None,
         target=args.target,
+        tz=args.tz,
     )
     cmd_daily_counts(db, daily_args)
 
@@ -279,6 +308,7 @@ def cmd_day_details(db: Database, args):
             to_date=end.isoformat(),
             type=args.type,
             target=args.target,
+            tz=args.tz,
         ),
     )
 
@@ -290,6 +320,7 @@ def cmd_day_details(db: Database, args):
             to_date=end.isoformat(),
             type=args.type,
             target=args.target,
+            tz=args.tz,
         ),
     )
 
@@ -312,37 +343,38 @@ def menu(db: Database):
     if action == "New in range":
         from_date = Prompt.ask("From (YYYY-MM-DD)")
         to_date = Prompt.ask("To (YYYY-MM-DD)")
-        cmd_new(db, argparse.Namespace(from_date=from_date+"T00:00:00", to_date=to_date+"T23:59:59", type="both", target=None))
+        cmd_new(db, argparse.Namespace(from_date=from_date+"T00:00:00", to_date=to_date+"T23:59:59", type="both", target=None, tz="local"))
     elif action == "Lost in range":
         from_date = Prompt.ask("From (YYYY-MM-DD)")
         to_date = Prompt.ask("To (YYYY-MM-DD)")
-        cmd_lost(db, argparse.Namespace(from_date=from_date+"T00:00:00", to_date=to_date+"T23:59:59", type="both", target=None))
+        cmd_lost(db, argparse.Namespace(from_date=from_date+"T00:00:00", to_date=to_date+"T23:59:59", type="both", target=None, tz="local"))
     elif action == "Snapshot at time":
         at = Prompt.ask("At (YYYY-MM-DDTHH:MM:SS, blank for now)", default="")
-        cmd_snapshot(db, argparse.Namespace(at=at if at else None, type="both", target=None))
+        cmd_snapshot(db, argparse.Namespace(at=at if at else None, type="both", target=None, tz="local"))
     elif action == "Summary last N days":
         days = int(Prompt.ask("Days", default="7"))
         cmd_summary(db, argparse.Namespace(days=days))
     elif action == "Daily counts":
         days = int(Prompt.ask("Days", default="7"))
         target = Prompt.ask("Target username (blank for all)", default="")
-        cmd_daily_counts(db, argparse.Namespace(days=days, target=target or None, from_date=None, to_date=None))
+        cmd_daily_counts(db, argparse.Namespace(days=days, target=target or None, from_date=None, to_date=None, tz="local"))
     elif action == "Day details":
         day = Prompt.ask("Day (YYYY-MM-DD)")
         target = Prompt.ask("Target username (blank for all)", default="")
         ftype = questionary.select("Type", choices=["both", "followers", "followings"]).ask()
-        cmd_day_details(db, argparse.Namespace(date=day, target=target or None, type=ftype or "both"))
+        cmd_day_details(db, argparse.Namespace(date=day, target=target or None, type=ftype or "both", tz="local"))
     elif action == "Current followers/followings":
         target = Prompt.ask("Target username (blank for all)", default="")
         ftype = questionary.select("Type", choices=["both", "followers", "followings"]).ask()
         out_csv = Prompt.ask("Save to CSV path (blank to skip)", default="")
         out_json = Prompt.ask("Save to JSON path (blank to skip)", default="")
         cmd_list_current(db, argparse.Namespace(type=ftype or "both", target=target or None,
-                                                out_csv=out_csv or None, out_json=out_json or None))
+                                                out_csv=out_csv or None, out_json=out_json or None, tz="local"))
 
 
 def build_parser():
     parser = argparse.ArgumentParser(description="Report on Instagram tracker data")
+    parser.add_argument("--tz", default="local", help="Timezone for displayed timestamps (e.g. local, UTC, America/New_York)")
     sub = parser.add_subparsers(dest="command")
 
     p_new = sub.add_parser("new", help="List new followers/followings in date range")
