@@ -8,6 +8,7 @@ import logging
 import signal
 import subprocess
 import atexit
+import sqlite3
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 import pytz
@@ -75,6 +76,35 @@ def random_sleep(min_seconds=2, max_seconds=5):
 
 def random_scroll():
     return random.uniform(0.3, 0.7)
+
+
+def _last_success_age_hours(db_path="instagram_tracker.db"):
+    if not os.path.exists(db_path):
+        return None, None
+    conn = sqlite3.connect(db_path, timeout=2)
+    try:
+        row = conn.execute(
+            """
+            SELECT COALESCE(run_finished_at, run_started_at)
+            FROM run_history
+            WHERE status = 'success'
+            ORDER BY COALESCE(run_finished_at, run_started_at) DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row or not row[0]:
+        return None, None
+    try:
+        last_success = datetime.fromisoformat(str(row[0]))
+    except ValueError:
+        return None, None
+    if last_success.tzinfo is None:
+        last_success = last_success.replace(tzinfo=pytz.UTC)
+    now = datetime.now(pytz.UTC)
+    age_hours = (now - last_success).total_seconds() / 3600.0
+    return age_hours, last_success
 
 
 class SingleInstanceLock:
@@ -655,6 +685,11 @@ def main():
     login_only_mode = os.getenv("LOGIN_ONLY_MODE", "false").lower() == "true"
     interval_minutes = int(os.getenv("RUN_INTERVAL_MINUTES", "60"))
     jitter_seconds = int(os.getenv("RUN_JITTER_SECONDS", "120"))
+    stale_success_hours = 0.0
+    try:
+        stale_success_hours = float(os.getenv("ALERT_STALE_SUCCESS_HOURS", "0"))
+    except ValueError:
+        stale_success_hours = 0.0
     login_only_timeout = os.getenv("LOGIN_ONLY_TIMEOUT_SECONDS")
     login_only_timeout_seconds = None
     if login_only_timeout:
@@ -714,6 +749,18 @@ def main():
                 ),
                 level="info",
             )
+        if stale_success_hours > 0:
+            age_hours, last_success = _last_success_age_hours()
+            if age_hours is not None and age_hours >= stale_success_hours:
+                send_alert(
+                    "tracker_stale_success",
+                    "Instagram tracker stale data warning",
+                    (
+                        f"No successful run in {age_hours:.1f} hours. "
+                        f"Last successful run: {last_success.isoformat()}."
+                    ),
+                    level="warning",
+                )
         sleep_seconds = interval_minutes * 60 + random.randint(0, jitter_seconds)
         print(f"Sleeping for {sleep_seconds} seconds until next run...")
         time.sleep(sleep_seconds)
