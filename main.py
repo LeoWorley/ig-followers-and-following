@@ -4,6 +4,10 @@ import json
 import random
 import sys
 import threading
+import logging
+import signal
+import subprocess
+from logging.handlers import RotatingFileHandler
 from datetime import datetime
 import pytz
 from dotenv import load_dotenv
@@ -21,6 +25,49 @@ from store_followers import store_followers
 # Load environment variables
 load_dotenv()
 
+
+def setup_logging():
+    if getattr(setup_logging, "_configured", False):
+        return
+    setup_logging._configured = True
+
+    log_file = os.getenv("LOG_FILE", "tracker.log")
+    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+    log_console = os.getenv("LOG_CONSOLE", "true").lower() == "true"
+    max_bytes = int(os.getenv("LOG_MAX_BYTES", "5242880"))
+    backup_count = int(os.getenv("LOG_BACKUP_COUNT", "3"))
+
+    logger = logging.getLogger()
+    logger.setLevel(log_level)
+
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    file_handler = RotatingFileHandler(log_file, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    if log_console and sys.__stdout__:
+        console_handler = logging.StreamHandler(sys.__stdout__)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+
+    class StreamToLogger:
+        def __init__(self, target_logger, level):
+            self.logger = target_logger
+            self.level = level
+
+        def write(self, message):
+            if not message:
+                return
+            for line in message.rstrip().splitlines():
+                self.logger.log(self.level, line)
+
+        def flush(self):
+            pass
+
+    sys.stdout = StreamToLogger(logging.getLogger("stdout"), logging.INFO)
+    sys.stderr = StreamToLogger(logging.getLogger("stderr"), logging.ERROR)
+    logging.captureWarnings(True)
+
 def random_sleep(min_seconds=2, max_seconds=5):
     time.sleep(random.uniform(min_seconds, max_seconds))
 
@@ -34,6 +81,8 @@ class InstagramTracker:
         self.password = os.getenv('IG_PASSWORD')
         self.target_account = os.getenv('TARGET_ACCOUNT')
         self.driver = None
+        self.driver_service = None
+        self.driver_service_pid = None
         self.cookies_file = 'instagram_cookies.json'
         
     def close_modal(self):
@@ -101,6 +150,11 @@ class InstagramTracker:
             service = Service(ChromeDriverManager().install())
             
         self.driver = webdriver.Chrome(service=service, options=chrome_options)
+        self.driver_service = service
+        try:
+            self.driver_service_pid = self.driver_service.process.pid
+        except Exception:
+            self.driver_service_pid = None
         self.driver.implicitly_wait(10)
         
         # Set window size to look more natural
@@ -476,13 +530,37 @@ class InstagramTracker:
             if self.driver:
                 try:
                     self.driver.quit()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logging.exception("Driver quit failed: %s", e)
+            self._force_kill_driver()
             self.db.close()
             print("Script finished")
 
+    def _force_kill_driver(self):
+        default_force = "true" if os.name == "nt" else "false"
+        force_kill = os.getenv("FORCE_KILL_CHROME", default_force).lower() == "true"
+        if not force_kill:
+            return
+        pid = self.driver_service_pid
+        if not pid:
+            return
+        try:
+            logging.info("Force-killing ChromeDriver process tree (pid=%s)", pid)
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            else:
+                os.kill(pid, signal.SIGTERM)
+        except Exception as e:
+            logging.exception("Force-kill failed: %s", e)
+
 
 def main():
+    setup_logging()
     login_only_mode = os.getenv("LOGIN_ONLY_MODE", "false").lower() == "true"
     interval_minutes = int(os.getenv("RUN_INTERVAL_MINUTES", "60"))
     jitter_seconds = int(os.getenv("RUN_JITTER_SECONDS", "120"))

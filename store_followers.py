@@ -4,7 +4,26 @@ from selenium.webdriver.support import expected_conditions as EC
 import time
 from datetime import datetime
 from database import FollowerFollowing
-from typing import Optional, Set
+from typing import Optional, Set, Tuple
+
+
+def _align_datetimes(a, b) -> Tuple[Optional[datetime], Optional[datetime]]:
+    if a is None or b is None:
+        return a, b
+    if (a.tzinfo is None) == (b.tzinfo is None):
+        return a, b
+    if a.tzinfo is None and b.tzinfo is not None:
+        return a.replace(tzinfo=b.tzinfo), b
+    if a.tzinfo is not None and b.tzinfo is None:
+        return a, b.replace(tzinfo=a.tzinfo)
+    return a, b
+
+
+def _midpoint_dt(a, b) -> Optional[datetime]:
+    a2, b2 = _align_datetimes(a, b)
+    if a2 is None or b2 is None:
+        return None
+    return a2 + (b2 - a2) / 2
 
 def _find_scroll_container(driver) -> Optional[object]:
     """
@@ -197,7 +216,7 @@ def store_followers(
             if username not in existing_items:
                 est_added = None
                 if prev_run_started_at:
-                    est_added = prev_run_started_at + (run_started_at - prev_run_started_at) / 2
+                    est_added = _midpoint_dt(prev_run_started_at, run_started_at)
                 ff = FollowerFollowing(
                     target_id=target_id,
                     follower_following_username=username,
@@ -228,7 +247,7 @@ def store_followers(
                 if entry.last_seen_run_at is None:
                     entry.last_seen_run_at = run_started_at
                 if entry.last_seen_run_at:
-                    entry.estimated_removed_at = entry.last_seen_run_at + (run_started_at - entry.last_seen_run_at) / 2
+                    entry.estimated_removed_at = _midpoint_dt(entry.last_seen_run_at, run_started_at)
                 else:
                     entry.estimated_removed_at = run_started_at
         db.session.commit()

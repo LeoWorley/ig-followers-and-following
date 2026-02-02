@@ -38,6 +38,7 @@ _log_handle = None
 
 def _tracker_env(overrides=None):
     env = os.environ.copy()
+    env.setdefault("LOG_FILE", str(LOG_PATH))
     if overrides:
         env.update(overrides)
     return env

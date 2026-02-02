@@ -41,6 +41,12 @@ TARGET_ACCOUNT=account_to_track
 # LOGIN_ONLY_TIMEOUT_SECONDS=600
 # RUN_INTERVAL_MINUTES=60
 # RUN_JITTER_SECONDS=120
+# LOG_FILE=tracker.log
+# LOG_LEVEL=INFO
+# LOG_CONSOLE=true
+# LOG_MAX_BYTES=5242880
+# LOG_BACKUP_COUNT=3
+# FORCE_KILL_CHROME=true
 # TRAY_AUTO_START=false
 # TRAY_MONITOR_ONLY=false
 # TRAY_LOG_PATH=tracker.log
@@ -99,6 +105,11 @@ If cookies expire (password change, new device/IP, etc.), repeat the headful ste
   - Make sure `.env` and `instagram_cookies.json` are in the project folder.
   - For scheduled runs, use `HEADLESS_MODE=true` and `LOGIN_ONLY_MODE=false`.
   - If you need 2FA, run one login-only session interactively first: set `LOGIN_ONLY_MODE=true`, `HEADLESS_MODE=false`, run `python main.py` in a normal terminal, complete login, then set `LOGIN_ONLY_MODE=false`.
+
+### Logging
+
+- Logs write to `LOG_FILE` (default `tracker.log`) with rotation (`LOG_MAX_BYTES`, `LOG_BACKUP_COUNT`).
+- Set `LOG_CONSOLE=true` to also print logs to the terminal.
 
 ### Tray app (Windows, optional)
 
