@@ -179,6 +179,19 @@ Small monitor/controller with report shortcuts.
 - Auto monitor mode on Windows when Task Scheduler is detected:
   - `TRAY_AUTO_MONITOR_ON_SCHEDULER=true`
 
+## Packaging (standalone binaries)
+
+You can build executables/app bundles with PyInstaller:
+
+- Windows:
+  - `.\build_apps.ps1`
+- macOS/Linux:
+  - `./build_apps.sh`
+
+Use skip-install mode if PyInstaller is already installed:
+- PowerShell: `.\build_apps.ps1 -SkipInstall`
+- Bash: `./build_apps.sh --skip-install`
+
 ## Reports (`report.py`)
 
 Examples:
