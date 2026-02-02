@@ -209,6 +209,28 @@ def _read_last_run():
         return None
 
 
+def _read_last_success_run():
+    if not DB_PATH.exists():
+        return None
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=1)
+        try:
+            row = conn.execute(
+                "SELECT run_started_at, run_finished_at "
+                "FROM run_history WHERE status = 'success' "
+                "ORDER BY run_started_at DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return None
+        started_at = _parse_dt(row[0])
+        finished_at = _parse_dt(row[1])
+        return {"started_at": started_at, "finished_at": finished_at}
+    except Exception:
+        return None
+
+
 def _report_time_range(days: int):
     end = _utcnow_naive().replace(microsecond=0)
     start = (end - timedelta(days=days)).replace(microsecond=0)
@@ -286,6 +308,7 @@ class TrackerGUI:
         self.wizard_summary_var = tk.StringVar(value="Run checks to verify first-time setup.")
         self.cookie_status_var = tk.StringVar(value="Cookie: unknown")
         self.error_status_var = tk.StringVar(value="Last error: none")
+        self.stale_status_var = tk.StringVar(value="Freshness: unknown")
         self.session_monitor_only = tk.BooleanVar(value=MONITOR_ONLY)
         self._auto_mode_applied = False
 
@@ -331,6 +354,7 @@ class TrackerGUI:
         health_frame.pack(fill="x", **padding)
         ttk.Label(health_frame, textvariable=self.cookie_status_var).pack(side="left", padx=(0, 14))
         ttk.Label(health_frame, textvariable=self.error_status_var).pack(side="left")
+        ttk.Label(health_frame, textvariable=self.stale_status_var).pack(side="left", padx=(14, 0))
 
         controls = ttk.Frame(self.root)
         controls.pack(fill="x", **padding)
@@ -639,6 +663,20 @@ class TrackerGUI:
             pass
         return "Last error: none"
 
+    def _freshness_text(self):
+        last_success = _read_last_success_run()
+        if not last_success:
+            return "Freshness: no successful runs yet"
+        ts = last_success.get("finished_at") or last_success.get("started_at")
+        if not ts:
+            return "Freshness: unknown"
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age_hours = (datetime.now(timezone.utc) - ts.astimezone(timezone.utc)).total_seconds() / 3600.0
+        if age_hours < 1:
+            return f"Freshness: {age_hours * 60:.0f} min since success"
+        return f"Freshness: {age_hours:.1f} h since success"
+
     def _open_env_file(self):
         _open_path(ENV_PATH)
 
@@ -925,6 +963,7 @@ class TrackerGUI:
             self._last_options_refresh = time.time()
         self.cookie_status_var.set(self._cookie_health_text())
         self.error_status_var.set(self._last_error_text())
+        self.stale_status_var.set(self._freshness_text())
         running = _is_running()
         last_run = _read_last_run()
         if last_run:
