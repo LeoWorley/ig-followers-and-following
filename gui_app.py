@@ -333,6 +333,7 @@ class TrackerGUI:
         self.list_target_var = tk.StringVar(value="")
         self.daily_target_var = tk.StringVar(value="(all)")
         self.daily_type_var = tk.StringVar(value="both")
+        self._suppress_daily_select = False
 
         self._load_available_dates()
         self._last_options_refresh = time.time()
@@ -1098,6 +1099,7 @@ class TrackerGUI:
         return rows
 
     def _load_daily_compare(self, show_message=True):
+        prev_day = self._selected_daily_day() or (self.day_var.get() or "").strip()
         self._clear_tree(self.daily_tree)
         self._clear_tree(self.daily_new_tree)
         self._clear_tree(self.daily_lost_tree)
@@ -1126,9 +1128,25 @@ class TrackerGUI:
                 values=(row["day"], new_followers, lost_followers, new_followings, lost_followings),
             )
 
-        first_item = self.daily_tree.get_children()
-        if first_item:
-            self.daily_tree.selection_set(first_item[0])
+        self._suppress_daily_select = True
+        try:
+            selected_item = None
+            if prev_day:
+                for item in self.daily_tree.get_children():
+                    values = self.daily_tree.item(item, "values")
+                    if values and str(values[0]) == prev_day:
+                        selected_item = item
+                        break
+            if selected_item is None:
+                children = self.daily_tree.get_children()
+                if children:
+                    selected_item = children[0]
+            if selected_item is not None:
+                self.daily_tree.selection_set(selected_item)
+        finally:
+            self._suppress_daily_select = False
+
+        if self.daily_tree.selection():
             self._load_selected_day_details()
         if show_message:
             self._set_message("Daily compare loaded from DB.")
@@ -1143,6 +1161,8 @@ class TrackerGUI:
         return str(values[0])
 
     def _on_daily_select(self):
+        if self._suppress_daily_select:
+            return
         day = self._selected_daily_day()
         if day:
             self.day_var.set(day)
