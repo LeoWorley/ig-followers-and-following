@@ -7,6 +7,7 @@ import threading
 import logging
 import signal
 import subprocess
+import atexit
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 import pytz
@@ -73,6 +74,51 @@ def random_sleep(min_seconds=2, max_seconds=5):
 
 def random_scroll():
     return random.uniform(0.3, 0.7)
+
+
+class SingleInstanceLock:
+    def __init__(self, lock_path):
+        self.lock_path = lock_path
+        self.acquired = False
+
+    def _is_pid_alive(self, pid):
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+    def acquire(self):
+        while True:
+            try:
+                fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(str(os.getpid()))
+                self.acquired = True
+                return True
+            except FileExistsError:
+                try:
+                    with open(self.lock_path, "r", encoding="utf-8") as handle:
+                        pid_text = handle.read().strip()
+                    pid = int(pid_text) if pid_text else None
+                except Exception:
+                    pid = None
+                if pid and self._is_pid_alive(pid):
+                    return False
+                try:
+                    os.remove(self.lock_path)
+                    continue
+                except OSError:
+                    return False
+
+    def release(self):
+        if not self.acquired:
+            return
+        try:
+            os.remove(self.lock_path)
+        except OSError:
+            pass
+        self.acquired = False
 
 class InstagramTracker:
     def __init__(self):
@@ -561,6 +607,16 @@ class InstagramTracker:
 
 def main():
     setup_logging()
+    disable_run_lock = os.getenv("DISABLE_RUN_LOCK", "false").lower() == "true"
+    lock = None
+    if not disable_run_lock:
+        lock_file = os.getenv("LOCK_FILE", "tracker.lock")
+        lock = SingleInstanceLock(lock_file)
+        if not lock.acquire():
+            print(f"Another tracker instance is already running (lock: {lock_file}). Exiting.")
+            return
+        atexit.register(lock.release)
+
     login_only_mode = os.getenv("LOGIN_ONLY_MODE", "false").lower() == "true"
     interval_minutes = int(os.getenv("RUN_INTERVAL_MINUTES", "60"))
     jitter_seconds = int(os.getenv("RUN_JITTER_SECONDS", "120"))

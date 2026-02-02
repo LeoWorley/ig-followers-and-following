@@ -279,6 +279,10 @@ class TrackerGUI:
         self.message_var = tk.StringVar(value="")
         self.last_output = ""
         self.wizard_summary_var = tk.StringVar(value="Run checks to verify first-time setup.")
+        self.cookie_status_var = tk.StringVar(value="Cookie: unknown")
+        self.error_status_var = tk.StringVar(value="Last error: none")
+        self.session_monitor_only = tk.BooleanVar(value=MONITOR_ONLY)
+        self._auto_mode_applied = False
 
         self.available_dates = []
         self.available_targets = []
@@ -315,26 +319,33 @@ class TrackerGUI:
         status_frame.pack(fill="x", **padding)
         ttk.Label(status_frame, textvariable=self.status_var).pack(side="left")
 
+        health_frame = ttk.Frame(self.root)
+        health_frame.pack(fill="x", **padding)
+        ttk.Label(health_frame, textvariable=self.cookie_status_var).pack(side="left", padx=(0, 14))
+        ttk.Label(health_frame, textvariable=self.error_status_var).pack(side="left")
+
         controls = ttk.Frame(self.root)
         controls.pack(fill="x", **padding)
-        start_btn = ttk.Button(controls, text="Start tracker", command=self._start_tracker_clicked)
-        stop_btn = ttk.Button(controls, text="Stop tracker", command=self._stop_tracker_clicked)
-        login_btn = ttk.Button(controls, text="Login-only", command=self._login_only_clicked)
+        self.start_btn = ttk.Button(controls, text="Start tracker", command=self._start_tracker_clicked)
+        self.stop_btn = ttk.Button(controls, text="Stop tracker", command=self._stop_tracker_clicked)
+        self.login_btn = ttk.Button(controls, text="Login-only", command=self._login_only_clicked)
         log_btn = ttk.Button(controls, text="Open log", command=_open_log)
         folder_btn = ttk.Button(controls, text="Open folder", command=_open_folder)
         reports_btn = ttk.Button(controls, text="Open reports", command=_open_reports_folder)
 
-        start_btn.pack(side="left", padx=4)
-        stop_btn.pack(side="left", padx=4)
-        login_btn.pack(side="left", padx=4)
+        self.start_btn.pack(side="left", padx=4)
+        self.stop_btn.pack(side="left", padx=4)
+        self.login_btn.pack(side="left", padx=4)
         log_btn.pack(side="left", padx=4)
         folder_btn.pack(side="left", padx=4)
         reports_btn.pack(side="left", padx=4)
-
-        if MONITOR_ONLY:
-            start_btn.configure(state="disabled")
-            stop_btn.configure(state="disabled")
-            login_btn.configure(state="disabled")
+        ttk.Checkbutton(
+            controls,
+            text="Monitor-only session",
+            variable=self.session_monitor_only,
+            command=self._apply_control_mode,
+        ).pack(side="left", padx=10)
+        self._apply_control_mode()
 
         wizard_frame = ttk.LabelFrame(self.root, text="First-run wizard")
         wizard_frame.pack(fill="x", **padding)
@@ -501,6 +512,45 @@ class TrackerGUI:
     def _set_message(self, text):
         self.message_var.set(text)
 
+    def _is_monitor_mode(self):
+        return bool(self.session_monitor_only.get())
+
+    def _apply_control_mode(self):
+        if not hasattr(self, "start_btn"):
+            return
+        state = "disabled" if self._is_monitor_mode() else "normal"
+        self.start_btn.configure(state=state)
+        self.stop_btn.configure(state=state)
+        self.login_btn.configure(state=state)
+
+    def _cookie_health_text(self):
+        cookie_file = ROOT_DIR / "instagram_cookies.json"
+        if not cookie_file.exists():
+            return "Cookie: missing"
+        age_hours = (time.time() - cookie_file.stat().st_mtime) / 3600.0
+        if age_hours < 24:
+            return f"Cookie: present ({age_hours:.1f}h old)"
+        return f"Cookie: present ({age_hours / 24.0:.1f}d old)"
+
+    def _last_error_text(self):
+        if not LOG_PATH.exists() or LOG_PATH.stat().st_size == 0:
+            return "Last error: none"
+        try:
+            with open(LOG_PATH, "rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                handle.seek(max(0, size - 65536), os.SEEK_SET)
+                data = handle.read().decode("utf-8", errors="replace")
+            lines = [line.strip() for line in data.splitlines() if line.strip()]
+            for line in reversed(lines):
+                if "[ERROR]" in line:
+                    if len(line) > 140:
+                        line = line[:137] + "..."
+                    return f"Last error: {line}"
+        except Exception:
+            pass
+        return "Last error: none"
+
     def _open_env_file(self):
         _open_path(ENV_PATH)
 
@@ -569,6 +619,10 @@ class TrackerGUI:
 
         if task_detected and not MONITOR_ONLY:
             checks.append(("Monitor-only mode", "WARN", "Set GUI_MONITOR_ONLY=true to avoid double runs"))
+            if not self._auto_mode_applied:
+                self.session_monitor_only.set(True)
+                self._apply_control_mode()
+                self._auto_mode_applied = True
         else:
             checks.append(("Monitor-only mode", "PASS", "Current mode is safe"))
 
@@ -774,6 +828,8 @@ class TrackerGUI:
         if time.time() - self._last_options_refresh >= OPTIONS_POLL_SECONDS:
             self._load_available_dates()
             self._last_options_refresh = time.time()
+        self.cookie_status_var.set(self._cookie_health_text())
+        self.error_status_var.set(self._last_error_text())
         running = _is_running()
         last_run = _read_last_run()
         if last_run:
@@ -786,14 +842,23 @@ class TrackerGUI:
         self.root.after(POLL_SECONDS * 1000, self._update_status)
 
     def _start_tracker_clicked(self):
+        if self._is_monitor_mode():
+            self._set_message("Monitor-only mode enabled; tracker controls are disabled.")
+            return
         _start_tracker()
         self._set_message("Tracker started.")
 
     def _stop_tracker_clicked(self):
+        if self._is_monitor_mode():
+            self._set_message("Monitor-only mode enabled; tracker controls are disabled.")
+            return
         _stop_tracker()
         self._set_message("Tracker stopped.")
 
     def _login_only_clicked(self):
+        if self._is_monitor_mode():
+            self._set_message("Monitor-only mode enabled; tracker controls are disabled.")
+            return
         _run_login_only()
         self._set_message("Login-only started (visible browser).")
 
