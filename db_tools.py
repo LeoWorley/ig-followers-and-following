@@ -1,7 +1,7 @@
 import argparse
 import shutil
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -9,7 +9,7 @@ DEFAULT_DB = "instagram_tracker.db"
 
 
 def _timestamp():
-    return datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
 
 def export_db(src_path: Path, out_path: Path | None, overwrite: bool) -> Path:
@@ -79,6 +79,172 @@ def _merge_is_lost(a, b):
     if b is None:
         return a
     return 0 if int(a) == 0 or int(b) == 0 else 1
+
+
+def preview_merge(dest_path: Path, src_path: Path) -> dict:
+    if not dest_path.exists():
+        raise FileNotFoundError(f"Destination DB not found: {dest_path}")
+    if not src_path.exists():
+        raise FileNotFoundError(f"Source DB not found: {src_path}")
+
+    conn = sqlite3.connect(str(dest_path))
+    try:
+        conn.execute("ATTACH DATABASE ? AS srcdb", (str(src_path),))
+        result = {}
+        result["new_targets"] = conn.execute(
+            """
+            SELECT COUNT(1)
+            FROM srcdb.targets st
+            WHERE NOT EXISTS (
+              SELECT 1 FROM targets t WHERE t.username = st.username
+            )
+            """
+        ).fetchone()[0]
+
+        result["new_run_history"] = conn.execute(
+            """
+            SELECT COUNT(1)
+            FROM srcdb.run_history r
+            JOIN srcdb.targets st ON st.id = r.target_id
+            JOIN targets t ON t.username = st.username
+            WHERE NOT EXISTS (
+              SELECT 1 FROM run_history r2
+              WHERE r2.target_id = t.id AND r2.run_started_at = r.run_started_at
+            )
+            """
+        ).fetchone()[0]
+
+        source_ff_rows = conn.execute(
+            """
+            SELECT
+              st.username,
+              ff.follower_following_username,
+              ff.is_follower
+            FROM srcdb.followers_followings ff
+            JOIN srcdb.targets st ON st.id = ff.target_id
+            GROUP BY st.username, ff.follower_following_username, ff.is_follower
+            """
+        ).fetchall()
+
+        ff_insert = 0
+        ff_update = 0
+        for target_name, follower_name, is_follower in source_ff_rows:
+            target_row = conn.execute("SELECT id FROM targets WHERE username = ?", (target_name,)).fetchone()
+            if target_row is None:
+                ff_insert += 1
+                continue
+            target_id = target_row[0]
+            existing = conn.execute(
+                """
+                SELECT 1 FROM followers_followings
+                WHERE target_id = ? AND follower_following_username = ? AND is_follower = ?
+                LIMIT 1
+                """,
+                (target_id, follower_name, is_follower),
+            ).fetchone()
+            if existing:
+                ff_update += 1
+            else:
+                ff_insert += 1
+
+        result["followers_followings_insert"] = ff_insert
+        result["followers_followings_update"] = ff_update
+
+        result["new_counts"] = conn.execute(
+            """
+            SELECT COUNT(1)
+            FROM srcdb.counts c
+            JOIN srcdb.targets st ON st.id = c.target_id
+            JOIN targets t ON t.username = st.username
+            WHERE NOT EXISTS (
+                SELECT 1 FROM counts c2
+                WHERE c2.target_id = t.id
+                  AND c2.count_type = c.count_type
+                  AND c2.timestamp = c.timestamp
+            )
+            """
+        ).fetchone()[0]
+
+        result["new_change_logs"] = conn.execute(
+            """
+            SELECT COUNT(1)
+            FROM srcdb.change_logs c
+            WHERE NOT EXISTS (
+                SELECT 1 FROM change_logs c2
+                WHERE c2.timestamp = c.timestamp
+                  AND c2.change_type = c.change_type
+                  AND c2.username = c.username
+            )
+            """
+        ).fetchone()[0]
+
+        conn.execute("DETACH DATABASE srcdb")
+        return result
+    finally:
+        conn.close()
+
+
+def cleanup_targets(dest_path: Path, usernames, apply: bool, backup: bool) -> dict:
+    if not dest_path.exists():
+        raise FileNotFoundError(f"Destination DB not found: {dest_path}")
+
+    usernames = [u.strip() for u in usernames if u.strip()]
+    if not usernames:
+        raise ValueError("No target usernames provided.")
+
+    conn = sqlite3.connect(str(dest_path))
+    try:
+        placeholders = ",".join("?" for _ in usernames)
+        target_rows = conn.execute(
+            f"SELECT id, username FROM targets WHERE username IN ({placeholders})",
+            usernames,
+        ).fetchall()
+        target_ids = [row[0] for row in target_rows]
+        matched_usernames = [row[1] for row in target_rows]
+
+        result = {
+            "matched_targets": matched_usernames,
+            "counts_rows": 0,
+            "followers_followings_rows": 0,
+            "run_history_rows": 0,
+            "targets_rows": len(target_rows),
+            "backup_path": None,
+            "applied": apply,
+        }
+
+        if not target_ids:
+            return result
+
+        id_ph = ",".join("?" for _ in target_ids)
+        result["counts_rows"] = conn.execute(
+            f"SELECT COUNT(1) FROM counts WHERE target_id IN ({id_ph})",
+            target_ids,
+        ).fetchone()[0]
+        result["followers_followings_rows"] = conn.execute(
+            f"SELECT COUNT(1) FROM followers_followings WHERE target_id IN ({id_ph})",
+            target_ids,
+        ).fetchone()[0]
+        result["run_history_rows"] = conn.execute(
+            f"SELECT COUNT(1) FROM run_history WHERE target_id IN ({id_ph})",
+            target_ids,
+        ).fetchone()[0]
+
+        if not apply:
+            return result
+
+        if backup:
+            backup_path = dest_path.with_name(f"{dest_path.stem}.bak_{_timestamp()}{dest_path.suffix}")
+            shutil.copy2(dest_path, backup_path)
+            result["backup_path"] = str(backup_path)
+
+        with conn:
+            conn.execute(f"DELETE FROM counts WHERE target_id IN ({id_ph})", target_ids)
+            conn.execute(f"DELETE FROM followers_followings WHERE target_id IN ({id_ph})", target_ids)
+            conn.execute(f"DELETE FROM run_history WHERE target_id IN ({id_ph})", target_ids)
+            conn.execute(f"DELETE FROM targets WHERE id IN ({id_ph})", target_ids)
+        return result
+    finally:
+        conn.close()
 
 
 def merge_db(dest_path: Path, src_path: Path, backup: bool) -> dict:
@@ -331,6 +497,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_merge.add_argument("--dest", default=DEFAULT_DB, help="Destination DB path (default: instagram_tracker.db)")
     p_merge.add_argument("--no-backup", action="store_true", help="Do not create a backup of destination DB")
 
+    p_preview = sub.add_parser("preview-merge", help="Preview merge results without writing")
+    p_preview.add_argument("--src", required=True, help="Source DB path to merge")
+    p_preview.add_argument("--dest", default=DEFAULT_DB, help="Destination DB path (default: instagram_tracker.db)")
+
+    p_cleanup = sub.add_parser("cleanup-targets", help="Preview or remove unwanted targets and related rows")
+    p_cleanup.add_argument("--dest", default=DEFAULT_DB, help="Destination DB path (default: instagram_tracker.db)")
+    p_cleanup.add_argument(
+        "--usernames",
+        nargs="+",
+        default=["followers", "following"],
+        help="Target usernames to clean up (default: followers following)",
+    )
+    p_cleanup.add_argument("--apply", action="store_true", help="Apply deletion (default is preview only)")
+    p_cleanup.add_argument("--no-backup", action="store_true", help="Do not create backup when applying deletions")
+
     return parser
 
 
@@ -361,6 +542,42 @@ def main():
             "Updated rows -> "
             f"followers_followings: {counts['followers_followings_updated']}"
         )
+        return
+
+    if args.command == "preview-merge":
+        preview = preview_merge(Path(args.dest), Path(args.src))
+        print("Merge preview (no changes applied):")
+        print(f"- targets to insert: {preview['new_targets']}")
+        print(f"- run_history rows to insert: {preview['new_run_history']}")
+        print(f"- followers_followings rows to insert: {preview['followers_followings_insert']}")
+        print(f"- followers_followings rows to update: {preview['followers_followings_update']}")
+        print(f"- counts rows to insert: {preview['new_counts']}")
+        print(f"- change_logs rows to insert: {preview['new_change_logs']}")
+        return
+
+    if args.command == "cleanup-targets":
+        result = cleanup_targets(
+            Path(args.dest),
+            args.usernames,
+            apply=args.apply,
+            backup=not args.no_backup,
+        )
+        if not result["matched_targets"]:
+            print("No matching targets found.")
+            return
+        mode = "Applied" if result["applied"] else "Preview"
+        print(f"{mode} cleanup for targets: {', '.join(result['matched_targets'])}")
+        print(
+            f"- target rows: {result['targets_rows']}\n"
+            f"- run_history rows: {result['run_history_rows']}\n"
+            f"- followers_followings rows: {result['followers_followings_rows']}\n"
+            f"- counts rows: {result['counts_rows']}"
+        )
+        if result["backup_path"]:
+            print(f"Backup created: {result['backup_path']}")
+        if not result["applied"]:
+            print("No changes applied. Re-run with --apply to execute deletion.")
+        return
 
 
 if __name__ == "__main__":
