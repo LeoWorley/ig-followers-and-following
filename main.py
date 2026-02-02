@@ -107,6 +107,35 @@ def _last_success_age_hours(db_path="instagram_tracker.db"):
     return age_hours, last_success
 
 
+def _run_db_quick_check(db_path="instagram_tracker.db"):
+    if not os.path.exists(db_path):
+        return True, "database file not found"
+    conn = sqlite3.connect(db_path, timeout=5)
+    try:
+        row = conn.execute("PRAGMA quick_check(1);").fetchone()
+    finally:
+        conn.close()
+    result = (row[0] if row else "").strip().lower()
+    if result == "ok":
+        return True, "ok"
+    return False, result or "unknown quick_check response"
+
+
+def _vacuum_db(db_path="instagram_tracker.db"):
+    if not os.path.exists(db_path):
+        return False
+    conn = sqlite3.connect(db_path, timeout=30)
+    try:
+        conn.execute("VACUUM;")
+        conn.commit()
+        return True
+    except Exception:
+        logging.exception("DB vacuum failed")
+        return False
+    finally:
+        conn.close()
+
+
 class SingleInstanceLock:
     def __init__(self, lock_path):
         self.lock_path = lock_path
@@ -685,6 +714,14 @@ def main():
     login_only_mode = os.getenv("LOGIN_ONLY_MODE", "false").lower() == "true"
     interval_minutes = int(os.getenv("RUN_INTERVAL_MINUTES", "60"))
     jitter_seconds = int(os.getenv("RUN_JITTER_SECONDS", "120"))
+    try:
+        db_integrity_every_runs = int(os.getenv("DB_INTEGRITY_CHECK_EVERY_RUNS", "0"))
+    except ValueError:
+        db_integrity_every_runs = 0
+    try:
+        db_vacuum_every_runs = int(os.getenv("DB_VACUUM_EVERY_RUNS", "0"))
+    except ValueError:
+        db_vacuum_every_runs = 0
     stale_success_hours = 0.0
     try:
         stale_success_hours = float(os.getenv("ALERT_STALE_SUCCESS_HOURS", "0"))
@@ -729,7 +766,9 @@ def main():
             tracker.db.close()
         return
 
+    run_counter = 0
     while True:
+        run_counter += 1
         tracker = InstagramTracker()
         run_result = tracker.run()
         if run_result.get("status") != "success":
@@ -761,6 +800,25 @@ def main():
                     ),
                     level="warning",
                 )
+        if db_integrity_every_runs > 0 and run_counter % db_integrity_every_runs == 0:
+            ok, msg = _run_db_quick_check()
+            if ok:
+                logging.info("SQLite quick_check passed.")
+            else:
+                logging.error("SQLite quick_check failed: %s", msg)
+                send_alert(
+                    "tracker_db_quick_check_failed",
+                    "Instagram tracker DB integrity warning",
+                    f"SQLite quick_check failed: {msg}",
+                    level="error",
+                )
+        if (
+            db_vacuum_every_runs > 0
+            and run_counter % db_vacuum_every_runs == 0
+            and run_result.get("status") == "success"
+        ):
+            if _vacuum_db():
+                logging.info("SQLite VACUUM completed.")
         sleep_seconds = interval_minutes * 60 + random.randint(0, jitter_seconds)
         print(f"Sleeping for {sleep_seconds} seconds until next run...")
         time.sleep(sleep_seconds)
