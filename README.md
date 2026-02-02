@@ -167,6 +167,7 @@ The GUI is designed for non-technical users:
   - preview merge from another `.db`
   - apply merge
   - preview/apply invalid target cleanup
+  - integrity check and vacuum actions
 
 Run directly:
 ```bash
@@ -241,6 +242,16 @@ python db_tools.py cleanup-targets --dest instagram_tracker.db
 Cleanup invalid targets (apply):
 ```bash
 python db_tools.py cleanup-targets --dest instagram_tracker.db --apply
+```
+
+DB integrity check:
+```bash
+python db_tools.py integrity-check --dest instagram_tracker.db
+```
+
+DB vacuum:
+```bash
+python db_tools.py vacuum --dest instagram_tracker.db
 ```
 
 Custom target cleanup list:
