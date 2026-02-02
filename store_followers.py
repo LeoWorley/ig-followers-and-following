@@ -1,6 +1,7 @@
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+import os
 import time
 from datetime import datetime
 from database import FollowerFollowing
@@ -66,6 +67,9 @@ def store_followers(
     print(f"Storing {list_type}...")
 
     try:
+        modal_wait_seconds = int(os.getenv("SCRAPE_MODAL_WAIT_SECONDS", "10"))
+        stall_timeout = int(os.getenv("SCRAPE_STALL_TIMEOUT_SECONDS", "15"))
+        max_iterations = int(os.getenv("SCRAPE_MAX_ITERATIONS", "500"))
         now_utc = run_started_at if run_started_at else datetime.utcnow()
         target_id = target.id
         is_follower = list_type == 'followers'
@@ -81,7 +85,7 @@ def store_followers(
 
         # Wait for the modal to be visible
         print("Waiting for modal to be visible...")
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, modal_wait_seconds).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, modal_selector))
         )
         print("Modal is visible, looking for scroll container...")
@@ -139,10 +143,8 @@ def store_followers(
         stable_iterations = 0
         last_count = 0
         last_change_ts = time.time()
-        stall_timeout = 15  # seconds without growth before stopping
         print("Starting to scroll and collect followers...")
 
-        max_iterations = 500  # safety cap
         loop = 0
         while loop < max_iterations:
             loop += 1
