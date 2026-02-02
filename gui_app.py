@@ -530,16 +530,16 @@ class TrackerGUI:
         daily_table_frame.pack(fill="both", padx=6, pady=(0, 4))
         self.daily_tree = ttk.Treeview(
             daily_table_frame,
-            columns=("day", "followers", "followings", "d_followers", "d_followings"),
+            columns=("day", "new_followers", "lost_followers", "new_followings", "lost_followings"),
             show="headings",
             height=6,
         )
         for col, label, width in [
             ("day", "Day", 100),
-            ("followers", "Followers", 90),
-            ("followings", "Followings", 90),
-            ("d_followers", "Delta followers", 110),
-            ("d_followings", "Delta followings", 115),
+            ("new_followers", "New followers", 110),
+            ("lost_followers", "Lost followers", 110),
+            ("new_followings", "New followings", 120),
+            ("lost_followings", "Lost followings", 120),
         ]:
             self.daily_tree.heading(col, text=label)
             self.daily_tree.column(col, width=width, anchor="center")
@@ -1000,31 +1000,36 @@ class TrackerGUI:
         for row in tree.get_children():
             tree.delete(row)
 
-    def _query_daily_rows(self, target_name):
+    def _query_daily_rows(self, target_name, list_type):
         if not DB_PATH.exists():
             return []
         conn = sqlite3.connect(str(DB_PATH), timeout=2)
         try:
-            rows = conn.execute(
+            new_rows = conn.execute(
                 """
-                WITH filtered AS (
-                    SELECT substr(c.timestamp, 1, 10) AS day, c.count_type, c.count, c.timestamp
-                    FROM counts c
-                    JOIN targets t ON t.id = c.target_id
-                    WHERE (? = '' OR t.username = ?)
-                ),
-                latest AS (
-                    SELECT day, count_type, MAX(timestamp) AS max_ts
-                    FROM filtered
-                    GROUP BY day, count_type
-                )
-                SELECT f.day, f.count_type, f.count
-                FROM filtered f
-                JOIN latest l
-                  ON l.day = f.day
-                 AND l.count_type = f.count_type
-                 AND l.max_ts = f.timestamp
-                ORDER BY f.day ASC
+                SELECT date(ff.first_seen_run_at) AS day,
+                       ff.is_follower,
+                       COUNT(1) AS cnt
+                FROM followers_followings ff
+                JOIN targets t ON t.id = ff.target_id
+                WHERE ff.first_seen_run_at IS NOT NULL
+                  AND (? = '' OR t.username = ?)
+                GROUP BY day, ff.is_follower
+                ORDER BY day ASC
+                """,
+                (target_name, target_name),
+            ).fetchall()
+            lost_rows = conn.execute(
+                """
+                SELECT date(ff.lost_at_run_at) AS day,
+                       ff.is_follower,
+                       COUNT(1) AS cnt
+                FROM followers_followings ff
+                JOIN targets t ON t.id = ff.target_id
+                WHERE ff.lost_at_run_at IS NOT NULL
+                  AND (? = '' OR t.username = ?)
+                GROUP BY day, ff.is_follower
+                ORDER BY day ASC
                 """,
                 (target_name, target_name),
             ).fetchall()
@@ -1032,37 +1037,30 @@ class TrackerGUI:
             conn.close()
 
         daily = {}
-        for day, count_type, count in rows:
-            entry = daily.setdefault(day, {"followers": None, "followings": None})
-            if count_type == "followers":
-                entry["followers"] = count
-            elif count_type == "followings":
-                entry["followings"] = count
+        for day, is_follower, cnt in new_rows:
+            entry = daily.setdefault(day, {"new_followers": 0, "lost_followers": 0, "new_followings": 0, "lost_followings": 0})
+            if int(is_follower) == 1:
+                entry["new_followers"] = cnt
+            else:
+                entry["new_followings"] = cnt
+        for day, is_follower, cnt in lost_rows:
+            entry = daily.setdefault(day, {"new_followers": 0, "lost_followers": 0, "new_followings": 0, "lost_followings": 0})
+            if int(is_follower) == 1:
+                entry["lost_followers"] = cnt
+            else:
+                entry["lost_followings"] = cnt
 
         ordered_days = sorted(daily.keys())
         result = []
-        prev_followers = None
-        prev_followings = None
         for day in ordered_days:
-            followers = daily[day]["followers"]
-            followings = daily[day]["followings"]
-            d_followers = None
-            d_followings = None
-            if prev_followers is not None and followers is not None:
-                d_followers = followers - prev_followers
-            if prev_followings is not None and followings is not None:
-                d_followings = followings - prev_followings
-            prev_followers = followers if followers is not None else prev_followers
-            prev_followings = followings if followings is not None else prev_followings
-            result.append(
-                {
-                    "day": day,
-                    "followers": followers,
-                    "followings": followings,
-                    "d_followers": d_followers,
-                    "d_followings": d_followings,
-                }
-            )
+            row = daily[day]
+            if list_type == "followers":
+                row["new_followings"] = None
+                row["lost_followings"] = None
+            elif list_type == "followings":
+                row["new_followers"] = None
+                row["lost_followers"] = None
+            result.append({"day": day, **row})
 
         days_limit = self._get_days()
         if days_limit > 0:
@@ -1106,8 +1104,9 @@ class TrackerGUI:
         target_name = (self.daily_target_var.get() or "").strip()
         if target_name == "(all)":
             target_name = ""
+        list_type = self.daily_type_var.get() or "both"
         try:
-            rows = self._query_daily_rows(target_name)
+            rows = self._query_daily_rows(target_name, list_type)
         except Exception as e:
             self._set_message(f"Daily compare failed: {e}")
             return
@@ -1117,14 +1116,14 @@ class TrackerGUI:
             return
 
         for row in rows:
-            followers = "-" if row["followers"] is None else str(row["followers"])
-            followings = "-" if row["followings"] is None else str(row["followings"])
-            d_followers = "-" if row["d_followers"] is None else f"{row['d_followers']:+d}"
-            d_followings = "-" if row["d_followings"] is None else f"{row['d_followings']:+d}"
+            new_followers = "-" if row["new_followers"] is None else str(row["new_followers"])
+            lost_followers = "-" if row["lost_followers"] is None else str(row["lost_followers"])
+            new_followings = "-" if row["new_followings"] is None else str(row["new_followings"])
+            lost_followings = "-" if row["lost_followings"] is None else str(row["lost_followings"])
             self.daily_tree.insert(
                 "",
                 "end",
-                values=(row["day"], followers, followings, d_followers, d_followings),
+                values=(row["day"], new_followers, lost_followers, new_followings, lost_followings),
             )
 
         first_item = self.daily_tree.get_children()
