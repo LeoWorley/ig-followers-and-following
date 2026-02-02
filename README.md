@@ -144,6 +144,14 @@ The GUI is designed for non-technical users:
   - cookie age
   - latest error from log
 - In-app reports rendered directly (with optional "Save output").
+- Daily compare view from DB (no file export required):
+  - per-day followers/followings totals
+  - per-day deltas
+  - selectable day details showing new/lost usernames
+- DB tools in GUI:
+  - preview merge from another `.db`
+  - apply merge
+  - preview/apply invalid target cleanup
 
 Run directly:
 ```bash
@@ -160,6 +168,8 @@ Small monitor/controller with report shortcuts.
 
 - Windows launcher: `.\start_tray.ps1`
 - macOS/Linux launcher: `./start_tray.sh`
+- Auto monitor mode on Windows when Task Scheduler is detected:
+  - `TRAY_AUTO_MONITOR_ON_SCHEDULER=true`
 
 ## Reports (`report.py`)
 
@@ -222,6 +232,7 @@ HEADLESS_MODE=true
 LOGIN_ONLY_MODE=false
 RUN_INTERVAL_MINUTES=60
 RUN_JITTER_SECONDS=120
+TRAY_AUTO_MONITOR_ON_SCHEDULER=true
 ```
 
 ## Troubleshooting
