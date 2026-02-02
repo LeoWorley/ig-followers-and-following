@@ -162,6 +162,7 @@ The GUI is designed for non-technical users:
   - per-day followers/followings totals
   - per-day deltas
   - selectable day details showing new/lost usernames
+  - export selected day details to CSV
 - DB tools in GUI:
   - preview merge from another `.db`
   - apply merge
