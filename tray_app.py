@@ -179,6 +179,19 @@ def _open_folder(_=None):
     _open_path(ROOT_DIR)
 
 
+def _open_gui(_=None):
+    try:
+        subprocess.Popen(
+            [sys.executable, "-u", "gui_app.py"],
+            cwd=str(ROOT_DIR),
+            env=_tracker_env(),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+
 def _parse_dt(value):
     if value is None:
         return None
@@ -406,6 +419,7 @@ def _menu():
         pystray.MenuItem("Stop tracker", _stop_tracker, enabled=lambda _: (not _runtime_monitor_only and _is_running())),
         pystray.MenuItem("Login-only (visible browser)", _run_login_only, enabled=lambda _: (not _runtime_monitor_only and not _is_running())),
         pystray.MenuItem("Reports", reports_menu),
+        pystray.MenuItem("Open GUI", _open_gui),
         pystray.MenuItem("Open log", _open_log),
         pystray.MenuItem("Open folder", _open_folder),
         pystray.MenuItem("Exit", _quit_app),
