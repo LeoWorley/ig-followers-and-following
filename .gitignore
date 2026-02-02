@@ -21,6 +21,11 @@ reports/
 tracker.log
 *.log
 
+# packaging
+build/
+dist/
+*.spec
+
 # OS junk
 .DS_Store
 
