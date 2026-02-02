@@ -1073,8 +1073,6 @@ class TrackerGUI:
     def _query_day_changes(self, day_str, target_name, list_type, event_type):
         if not DB_PATH.exists():
             return []
-        start_dt = f"{day_str}T00:00:00"
-        end_dt = f"{day_str}T23:59:59.999999"
         ts_col = "first_seen_run_at" if event_type == "new" else "lost_at_run_at"
         type_sql = ""
         if list_type == "followers":
@@ -1090,13 +1088,12 @@ class TrackerGUI:
                 FROM followers_followings ff
                 JOIN targets t ON t.id = ff.target_id
                 WHERE ff.{ts_col} IS NOT NULL
-                  AND ff.{ts_col} >= ?
-                  AND ff.{ts_col} <= ?
+                  AND date(ff.{ts_col}) = date(?)
                   AND (? = '' OR t.username = ?)
                   {type_sql}
                 ORDER BY ff.{ts_col} ASC, ff.follower_following_username ASC
                 """,
-                (start_dt, end_dt, target_name, target_name),
+                (day_str, target_name, target_name),
             ).fetchall()
         finally:
             conn.close()
