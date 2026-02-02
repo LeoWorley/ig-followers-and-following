@@ -100,6 +100,7 @@ The script waits for successful login, saves `instagram_cookies.json`, and exits
   - `ALERT_CHANNELS=webhook,desktop`
   - `ALERT_WEBHOOK_URL=https://your-endpoint.example/alerts`
   - `ALERT_COOLDOWN_SECONDS=1800`
+  - `ALERT_STALE_SUCCESS_HOURS=6` (0 disables stale-run alert)
   - `ALERT_ON_SUCCESS=false`
 
 ## Background Service Setup
