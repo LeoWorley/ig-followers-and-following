@@ -70,6 +70,10 @@ LOGIN_ONLY_MODE=true HEADLESS_MODE=false ./venv/bin/python main.py
 - Sleeps between runs using:
   - `RUN_INTERVAL_MINUTES` (default 60)
   - `RUN_JITTER_SECONDS` (default 120)
+- Scrape safety limits:
+  - `SCRAPE_MODAL_WAIT_SECONDS` (default 10)
+  - `SCRAPE_STALL_TIMEOUT_SECONDS` (default 15)
+  - `SCRAPE_MAX_ITERATIONS` (default 500)
 - Uses a single-instance lock to avoid accidental parallel runs:
   - `LOCK_FILE` (default `tracker.lock`)
   - `DISABLE_RUN_LOCK` (default `false`)
