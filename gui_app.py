@@ -5,6 +5,7 @@ import sqlite3
 import threading
 import subprocess
 import importlib.util
+import csv
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -497,6 +498,7 @@ class TrackerGUI:
         ).pack(side="left")
         ttk.Button(daily_controls, text="Load daily table", command=self._load_daily_compare).pack(side="left", padx=8)
         ttk.Button(daily_controls, text="Load selected day details", command=self._load_selected_day_details).pack(side="left", padx=4)
+        ttk.Button(daily_controls, text="Export selected day CSV", command=self._export_selected_day_csv).pack(side="left", padx=4)
 
         daily_table_frame = ttk.Frame(daily_frame)
         daily_table_frame.pack(fill="both", padx=6, pady=(0, 4))
@@ -1136,6 +1138,33 @@ class TrackerGUI:
             self.daily_lost_tree.insert("", "end", values=(ff_type, username, str(ts)))
 
         self._set_message(f"Day {day}: {len(new_rows)} new, {len(lost_rows)} lost.")
+
+    def _export_selected_day_csv(self):
+        day = self._selected_daily_day()
+        if not day:
+            self._set_message("Select a day from Daily compare first.")
+            return
+        path = filedialog.asksaveasfilename(
+            title="Export selected day details",
+            initialfile=f"day_details_{day}.csv",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", newline="", encoding="utf-8") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(["event", "type", "username", "timestamp"])
+                for item in self.daily_new_tree.get_children():
+                    ff_type, username, ts = self.daily_new_tree.item(item, "values")
+                    writer.writerow(["new", ff_type, username, ts])
+                for item in self.daily_lost_tree.get_children():
+                    ff_type, username, ts = self.daily_lost_tree.item(item, "values")
+                    writer.writerow(["lost", ff_type, username, ts])
+            self._set_message(f"Exported selected day to: {path}")
+        except Exception as e:
+            self._set_message(f"Export failed: {e}")
 
     def _run_db_tool(self, args, title, on_success=None):
         self._set_message("Running DB tool...")
