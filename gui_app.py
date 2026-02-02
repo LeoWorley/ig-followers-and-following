@@ -412,6 +412,8 @@ class TrackerGUI:
         ttk.Button(db_tools_frame, text="Merge from DB...", command=self._db_apply_merge).pack(side="left", padx=4, pady=4)
         ttk.Button(db_tools_frame, text="Preview cleanup targets", command=self._db_cleanup_preview).pack(side="left", padx=4, pady=4)
         ttk.Button(db_tools_frame, text="Apply cleanup targets", command=self._db_cleanup_apply).pack(side="left", padx=4, pady=4)
+        ttk.Button(db_tools_frame, text="DB integrity check", command=self._db_integrity_check).pack(side="left", padx=4, pady=4)
+        ttk.Button(db_tools_frame, text="DB vacuum", command=self._db_vacuum).pack(side="left", padx=4, pady=4)
 
         range_frame = ttk.LabelFrame(self.root, text="New/Lost in range (UTC)")
         range_frame.pack(fill="x", **padding)
@@ -1239,6 +1241,18 @@ class TrackerGUI:
         self._run_db_tool(
             ["cleanup-targets", "--dest", str(DB_PATH), "--apply"],
             "Cleanup targets apply",
+        )
+
+    def _db_integrity_check(self):
+        self._run_db_tool(
+            ["integrity-check", "--dest", str(DB_PATH)],
+            "DB integrity check",
+        )
+
+    def _db_vacuum(self):
+        self._run_db_tool(
+            ["vacuum", "--dest", str(DB_PATH)],
+            "DB vacuum",
         )
 
     def _summary_report(self):

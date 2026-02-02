@@ -247,6 +247,43 @@ def cleanup_targets(dest_path: Path, usernames, apply: bool, backup: bool) -> di
         conn.close()
 
 
+def integrity_check(dest_path: Path) -> dict:
+    if not dest_path.exists():
+        raise FileNotFoundError(f"Destination DB not found: {dest_path}")
+    conn = sqlite3.connect(str(dest_path))
+    try:
+        quick = conn.execute("PRAGMA quick_check(1);").fetchone()
+        full = conn.execute("PRAGMA integrity_check(1);").fetchone()
+    finally:
+        conn.close()
+    quick_result = (quick[0] if quick and quick[0] else "").strip().lower()
+    full_result = (full[0] if full and full[0] else "").strip().lower()
+    return {
+        "quick_check": quick_result or "unknown",
+        "integrity_check": full_result or "unknown",
+        "ok": quick_result == "ok" and full_result == "ok",
+    }
+
+
+def vacuum_db(dest_path: Path) -> dict:
+    if not dest_path.exists():
+        raise FileNotFoundError(f"Destination DB not found: {dest_path}")
+    before_size = dest_path.stat().st_size
+    conn = sqlite3.connect(str(dest_path))
+    try:
+        conn.execute("VACUUM;")
+        conn.execute("ANALYZE;")
+        conn.commit()
+    finally:
+        conn.close()
+    after_size = dest_path.stat().st_size
+    return {
+        "before_size": before_size,
+        "after_size": after_size,
+        "saved_bytes": before_size - after_size,
+    }
+
+
 def merge_db(dest_path: Path, src_path: Path, backup: bool) -> dict:
     if not dest_path.exists():
         raise FileNotFoundError(f"Destination DB not found: {dest_path}")
@@ -512,6 +549,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_cleanup.add_argument("--apply", action="store_true", help="Apply deletion (default is preview only)")
     p_cleanup.add_argument("--no-backup", action="store_true", help="Do not create backup when applying deletions")
 
+    p_integrity = sub.add_parser("integrity-check", help="Run SQLite quick_check + integrity_check")
+    p_integrity.add_argument("--dest", default=DEFAULT_DB, help="Destination DB path (default: instagram_tracker.db)")
+
+    p_vacuum = sub.add_parser("vacuum", help="Run SQLite VACUUM + ANALYZE")
+    p_vacuum.add_argument("--dest", default=DEFAULT_DB, help="Destination DB path (default: instagram_tracker.db)")
+
     return parser
 
 
@@ -577,6 +620,21 @@ def main():
             print(f"Backup created: {result['backup_path']}")
         if not result["applied"]:
             print("No changes applied. Re-run with --apply to execute deletion.")
+        return
+
+    if args.command == "integrity-check":
+        result = integrity_check(Path(args.dest))
+        print(f"quick_check: {result['quick_check']}")
+        print(f"integrity_check: {result['integrity_check']}")
+        print(f"status: {'ok' if result['ok'] else 'not_ok'}")
+        return
+
+    if args.command == "vacuum":
+        result = vacuum_db(Path(args.dest))
+        print(f"VACUUM completed for: {args.dest}")
+        print(f"Size before: {result['before_size']} bytes")
+        print(f"Size after: {result['after_size']} bytes")
+        print(f"Saved: {result['saved_bytes']} bytes")
         return
 
 
