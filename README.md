@@ -186,6 +186,9 @@ Small monitor/controller with report shortcuts.
 - macOS/Linux launcher: `./start_tray.sh`
 - Auto monitor mode on Windows when Task Scheduler is detected:
   - `TRAY_AUTO_MONITOR_ON_SCHEDULER=true`
+- Optional Windows startup shortcut:
+  - install: `.\register_tray_startup.ps1`
+  - remove: `.\register_tray_startup.ps1 -Remove`
 
 ## Packaging (standalone binaries)
 
