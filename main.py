@@ -22,6 +22,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
 from store_followers import store_followers
+from alerting import send_alert
 
 # Load environment variables
 load_dotenv()
@@ -414,6 +415,7 @@ class InstagramTracker:
                 print("Followers list opened successfully")
 
                 # Store current followers
+                followers_list = set()
                 try:
                     followers_list = store_followers(
                         self.driver,
@@ -428,6 +430,18 @@ class InstagramTracker:
                         print(f"Successfully scraped {len(followers_list)} followers")
                     else:
                         print("Warning: No followers were scraped")
+                        if followers_count > 0:
+                            print("Retrying followers scrape once...")
+                            followers_list = store_followers(
+                                self.driver,
+                                db=self.db,
+                                target=target,
+                                list_type='followers',
+                                run_started_at=run_started_at,
+                                run_id=run_id,
+                                prev_run_started_at=prev_run_started_at
+                            )
+                            print(f"Retry followers scraped: {len(followers_list)}")
                 except Exception as e:
                     print(f"Error during followers scraping: {str(e)}")
                     # Continue anyway, don't fail the entire process
@@ -495,6 +509,7 @@ class InstagramTracker:
                 print("Followings list opened successfully")
 
                 # Get current followings
+                current_followings_list = set()
                 try:
                     current_followings_list = store_followers(
                         self.driver,
@@ -509,6 +524,18 @@ class InstagramTracker:
                         print(f"Successfully scraped {len(current_followings_list)} followings")
                     else:
                         print("Warning: No followings were scraped")
+                        if followings_count > 0:
+                            print("Retrying followings scrape once...")
+                            current_followings_list = store_followers(
+                                self.driver,
+                                db=self.db,
+                                target=target,
+                                list_type='followings',
+                                run_started_at=run_started_at,
+                                run_id=run_id,
+                                prev_run_started_at=prev_run_started_at
+                            )
+                            print(f"Retry followings scraped: {len(current_followings_list)}")
                 except Exception as e:
                     print(f"Error during followings scraping: {str(e)}")
                     # Continue anyway, don't fail the entire process
@@ -531,14 +558,17 @@ class InstagramTracker:
         run_record = None
         followers_collected = 0
         followings_collected = 0
+        result = {"status": "failed", "error": None}
         try:
             self.setup_driver()
             if not self.login():
                 print("Failed to login, aborting...")
-                return
+                result["error"] = "login_failed"
+                return result
             if not self.navigate_to_profile():
                 print("Failed to load target profile, aborting...")
-                return
+                result["error"] = "profile_load_failed"
+                return result
 
             target = self.db.get_or_create_target(self.target_account)
             prev_run = self.db.get_last_run(target.id)
@@ -565,8 +595,12 @@ class InstagramTracker:
                                    followers_collected=followers_collected,
                                    followings_collected=followings_collected,
                                    finished_at=datetime.now(pytz.UTC))
+            result["status"] = "success"
+            result["followers_collected"] = followers_collected
+            result["followings_collected"] = followings_collected
         except Exception as e:
             print(f"Error in run: {str(e)}")
+            result["error"] = str(e)
             if run_record:
                 self.db.finish_run(run_record.id, status="failed",
                                    followers_collected=followers_collected,
@@ -581,6 +615,7 @@ class InstagramTracker:
             self._force_kill_driver()
             self.db.close()
             print("Script finished")
+        return result
 
     def _force_kill_driver(self):
         default_force = "true" if os.name == "nt" else "false"
@@ -644,6 +679,12 @@ def main():
                 print("Login-only mode succeeded. Cookies saved to instagram_cookies.json. Exiting.")
             else:
                 print("Login-only mode timed out. Please retry with HEADLESS_MODE=false and correct credentials.")
+                send_alert(
+                    "login_only_failed",
+                    "Instagram tracker login-only failed",
+                    "Login-only mode timed out or did not detect a valid session cookie.",
+                    level="warning",
+                )
         finally:
             if tracker.driver:
                 try:
@@ -655,7 +696,24 @@ def main():
 
     while True:
         tracker = InstagramTracker()
-        tracker.run()
+        run_result = tracker.run()
+        if run_result.get("status") != "success":
+            send_alert(
+                "tracker_run_failed",
+                "Instagram tracker run failed",
+                f"Run failed. Reason: {run_result.get('error', 'unknown')}",
+                level="error",
+            )
+        elif os.getenv("ALERT_ON_SUCCESS", "false").lower() == "true":
+            send_alert(
+                "tracker_run_success",
+                "Instagram tracker run succeeded",
+                (
+                    f"Followers processed: {run_result.get('followers_collected', 0)}, "
+                    f"followings processed: {run_result.get('followings_collected', 0)}"
+                ),
+                level="info",
+            )
         sleep_seconds = interval_minutes * 60 + random.randint(0, jitter_seconds)
         print(f"Sleeping for {sleep_seconds} seconds until next run...")
         time.sleep(sleep_seconds)
