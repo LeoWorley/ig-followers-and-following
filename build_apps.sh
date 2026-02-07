@@ -16,12 +16,18 @@ if [[ "${1:-}" != "--skip-install" ]]; then
 fi
 
 echo "Building GUI app..."
-"$PYTHON" -m PyInstaller --noconfirm --clean --windowed --name ig-tracker-gui gui_app.py
+"$PYTHON" -m PyInstaller --noconfirm --clean --onefile --windowed --name ig-tracker-gui gui_app.py
 
 echo "Building tray app..."
-"$PYTHON" -m PyInstaller --noconfirm --clean --windowed --name ig-tracker-tray tray_app.py
+"$PYTHON" -m PyInstaller --noconfirm --clean --onefile --windowed --name ig-tracker-tray tray_app.py
 
 echo "Building tracker CLI..."
-"$PYTHON" -m PyInstaller --noconfirm --clean --name ig-tracker-cli main.py
+"$PYTHON" -m PyInstaller --noconfirm --clean --onefile --name ig-tracker-cli main.py
+
+echo "Building report CLI..."
+"$PYTHON" -m PyInstaller --noconfirm --clean --onefile --name ig-tracker-report report.py
+
+echo "Building DB tools CLI..."
+"$PYTHON" -m PyInstaller --noconfirm --clean --onefile --name ig-tracker-db-tools db_tools.py
 
 echo "Build complete. Binaries are in ./dist"
