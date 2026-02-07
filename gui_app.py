@@ -19,9 +19,14 @@ try:
 except Exception:
     Calendar = None
 
-ROOT_DIR = Path(__file__).resolve().parent
+if getattr(sys, "frozen", False):
+    ROOT_DIR = Path(sys.executable).resolve().parent
+else:
+    ROOT_DIR = Path(__file__).resolve().parent
 ENV_PATH = ROOT_DIR / ".env"
 load_dotenv(ENV_PATH)
+IS_FROZEN = getattr(sys, "frozen", False)
+BIN_DIR = Path(sys.executable).resolve().parent if IS_FROZEN else ROOT_DIR
 
 APP_TITLE = os.getenv("GUI_APP_TITLE") or os.getenv("TRAY_APP_TITLE", "IG Tracker")
 LOG_PATH = Path(os.getenv("GUI_LOG_PATH") or os.getenv("TRAY_LOG_PATH") or str(ROOT_DIR / "tracker.log"))
@@ -37,6 +42,13 @@ REQUIRED_ENV_KEYS = ("IG_USERNAME", "IG_PASSWORD", "TARGET_ACCOUNT")
 _process_lock = threading.Lock()
 _process = None
 _log_handle = None
+
+
+def _tool_cmd(script_name: str, exe_name: str):
+    if IS_FROZEN:
+        exe_path = BIN_DIR / exe_name
+        return [str(exe_path)] if exe_path.exists() else None
+    return [sys.executable, "-u", script_name]
 
 
 def _utcnow_naive():
@@ -73,13 +85,16 @@ def _start_tracker():
     if MONITOR_ONLY:
         return
     global _process, _log_handle
+    cmd = _tool_cmd("main.py", "ig-tracker-cli.exe")
+    if not cmd:
+        return
     with _process_lock:
         if _process is not None and _process.poll() is None:
             return
         LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         _log_handle = open(LOG_PATH, "a", encoding="utf-8")
         _process = subprocess.Popen(
-            [sys.executable, "-u", "main.py"],
+            cmd,
             cwd=str(ROOT_DIR),
             env=_tracker_env(),
             stdout=_log_handle,
@@ -114,11 +129,14 @@ def _run_login_only():
         return
     if _is_running():
         return
+    cmd = _tool_cmd("main.py", "ig-tracker-cli.exe")
+    if not cmd:
+        return
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     handle = open(LOG_PATH, "a", encoding="utf-8")
     env = _tracker_env({"LOGIN_ONLY_MODE": "true", "HEADLESS_MODE": "false"})
     proc = subprocess.Popen(
-        [sys.executable, "-u", "main.py"],
+        cmd,
         cwd=str(ROOT_DIR),
         env=env,
         stdout=handle,
@@ -294,11 +312,14 @@ def _timestamp():
 
 def _run_report_to_file(args, output_name, message_cb=None):
     def _worker():
+        cmd = _tool_cmd("report.py", "ig-tracker-report.exe")
+        if not cmd:
+            return
         REPORTS_DIR.mkdir(parents=True, exist_ok=True)
         output_path = REPORTS_DIR / output_name
         with open(output_path, "w", encoding="utf-8") as handle:
             subprocess.run(
-                [sys.executable, "-u", "report.py", *args],
+                [*cmd, *args],
                 cwd=str(ROOT_DIR),
                 env=_tracker_env(),
                 stdout=handle,
@@ -313,13 +334,16 @@ def _run_report_to_file(args, output_name, message_cb=None):
 
 def _run_report_list_csv(list_type, target, message_cb=None):
     def _worker():
+        cmd = _tool_cmd("report.py", "ig-tracker-report.exe")
+        if not cmd:
+            return
         REPORTS_DIR.mkdir(parents=True, exist_ok=True)
         output_path = REPORTS_DIR / f"current_{list_type}_{_timestamp()}.csv"
         args = ["list", "--type", list_type, "--out-csv", str(output_path)]
         if target:
             args += ["--target", target]
         subprocess.run(
-            [sys.executable, "-u", "report.py", *args],
+            [*cmd, *args],
             cwd=str(ROOT_DIR),
             env=_tracker_env(),
         )
@@ -332,13 +356,16 @@ def _run_report_list_csv(list_type, target, message_cb=None):
 
 def _run_report_list_json(list_type, target, message_cb=None):
     def _worker():
+        cmd = _tool_cmd("report.py", "ig-tracker-report.exe")
+        if not cmd:
+            return
         REPORTS_DIR.mkdir(parents=True, exist_ok=True)
         output_path = REPORTS_DIR / f"current_{list_type}_{_timestamp()}.json"
         args = ["list", "--type", list_type, "--out-json", str(output_path)]
         if target:
             args += ["--target", target]
         subprocess.run(
-            [sys.executable, "-u", "report.py", *args],
+            [*cmd, *args],
             cwd=str(ROOT_DIR),
             env=_tracker_env(),
         )
@@ -788,7 +815,11 @@ class TrackerGUI:
                     timeout=8,
                 )
                 text = (result.stdout or "").lower()
-                if "main.py" in text or "ig-followers-and-following" in text:
+                if (
+                    "main.py" in text
+                    or "ig-tracker-cli.exe" in text
+                    or "ig-followers-and-following" in text
+                ):
                     task_detected = True
                     task_note = "Task Scheduler entry detected"
             except Exception:
@@ -1293,8 +1324,12 @@ class TrackerGUI:
         self._set_message("Running DB tool...")
 
         def _worker():
+            cmd = _tool_cmd("db_tools.py", "ig-tracker-db-tools.exe")
+            if not cmd:
+                self.root.after(0, lambda: self._set_message("DB tool executable not found."))
+                return
             result = subprocess.run(
-                [sys.executable, "-u", "db_tools.py", *args],
+                [*cmd, *args],
                 cwd=str(ROOT_DIR),
                 env=_tracker_env(),
                 capture_output=True,
@@ -1498,10 +1533,14 @@ class TrackerGUI:
         self._set_message("Running report...")
 
         def _worker():
+            cmd = _tool_cmd("report.py", "ig-tracker-report.exe")
+            if not cmd:
+                self.root.after(0, lambda: self._set_message("Report executable not found."))
+                return
             env = _tracker_env({"RICH_COLOR_SYSTEM": "none", "TERM": "dumb"})
             run_args = ["--tz", "local", *args] if "--tz" not in args else args
             result = subprocess.run(
-                [sys.executable, "-u", "report.py", *run_args],
+                [*cmd, *run_args],
                 cwd=str(ROOT_DIR),
                 env=env,
                 capture_output=True,
@@ -1527,6 +1566,10 @@ class TrackerGUI:
         self._set_message("Running local day report...")
 
         def _worker():
+            cmd = _tool_cmd("report.py", "ig-tracker-report.exe")
+            if not cmd:
+                self.root.after(0, lambda: self._set_message("Report executable not found."))
+                return
             env = _tracker_env({"RICH_COLOR_SYSTEM": "none", "TERM": "dumb"})
             sections = []
             for label, command in [
@@ -1543,7 +1586,7 @@ class TrackerGUI:
                     command += ["--target", target]
                 command = ["--tz", "local", *command]
                 result = subprocess.run(
-                    [sys.executable, "-u", "report.py", *command],
+                    [*cmd, *command],
                     cwd=str(ROOT_DIR),
                     env=env,
                     capture_output=True,

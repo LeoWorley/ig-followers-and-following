@@ -12,9 +12,14 @@ import pystray
 from PIL import Image, ImageDraw
 
 
-ROOT_DIR = Path(__file__).resolve().parent
+if getattr(sys, "frozen", False):
+    ROOT_DIR = Path(sys.executable).resolve().parent
+else:
+    ROOT_DIR = Path(__file__).resolve().parent
 ENV_PATH = ROOT_DIR / ".env"
 load_dotenv(ENV_PATH)
+IS_FROZEN = getattr(sys, "frozen", False)
+BIN_DIR = Path(sys.executable).resolve().parent if IS_FROZEN else ROOT_DIR
 
 APP_TITLE = os.getenv("TRAY_APP_TITLE", "IG Tracker")
 LOG_PATH = Path(os.getenv("TRAY_LOG_PATH", str(ROOT_DIR / "tracker.log")))
@@ -34,6 +39,13 @@ _runtime_monitor_only = MONITOR_ONLY
 _scheduler_detected = False
 
 
+def _tool_cmd(script_name: str, exe_name: str):
+    if IS_FROZEN:
+        exe_path = BIN_DIR / exe_name
+        return [str(exe_path)] if exe_path.exists() else None
+    return [sys.executable, "-u", script_name]
+
+
 def _detect_scheduler_tracker():
     if not sys.platform.startswith("win"):
         return False
@@ -48,7 +60,11 @@ def _detect_scheduler_tracker():
             check=False,
         )
         text = (result.stdout or "").lower()
-        return "main.py" in text or "ig-followers-and-following" in text
+        return (
+            "main.py" in text
+            or "ig-tracker-cli.exe" in text
+            or "ig-followers-and-following" in text
+        )
     except Exception:
         return False
 
@@ -92,13 +108,16 @@ def _start_tracker(_=None):
     if _runtime_monitor_only:
         return
     global _process, _log_handle
+    cmd = _tool_cmd("main.py", "ig-tracker-cli.exe")
+    if not cmd:
+        return
     with _process_lock:
         if _process is not None and _process.poll() is None:
             return
         LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         _log_handle = open(LOG_PATH, "a", encoding="utf-8")
         _process = subprocess.Popen(
-            [sys.executable, "-u", "main.py"],
+            cmd,
             cwd=str(ROOT_DIR),
             env=_tracker_env(),
             stdout=_log_handle,
@@ -133,11 +152,14 @@ def _run_login_only(_=None):
         return
     if _is_running():
         return
+    cmd = _tool_cmd("main.py", "ig-tracker-cli.exe")
+    if not cmd:
+        return
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     handle = open(LOG_PATH, "a", encoding="utf-8")
     env = _tracker_env({"LOGIN_ONLY_MODE": "true", "HEADLESS_MODE": "false"})
     proc = subprocess.Popen(
-        [sys.executable, "-u", "main.py"],
+        cmd,
         cwd=str(ROOT_DIR),
         env=env,
         stdout=handle,
@@ -180,9 +202,12 @@ def _open_folder(_=None):
 
 
 def _open_gui(_=None):
+    cmd = _tool_cmd("gui_app.py", "ig-tracker-gui.exe")
+    if not cmd:
+        return
     try:
         subprocess.Popen(
-            [sys.executable, "-u", "gui_app.py"],
+            cmd,
             cwd=str(ROOT_DIR),
             env=_tracker_env(),
             stdout=subprocess.DEVNULL,
@@ -248,11 +273,14 @@ def _report_time_range():
 
 def _run_report_to_file(args, output_name):
     def _worker():
+        cmd = _tool_cmd("report.py", "ig-tracker-report.exe")
+        if not cmd:
+            return
         _ensure_reports_dir()
         output_path = REPORTS_DIR / output_name
         with open(output_path, "w", encoding="utf-8") as handle:
             subprocess.run(
-                [sys.executable, "-u", "report.py", *args],
+                [*cmd, *args],
                 cwd=str(ROOT_DIR),
                 env=_tracker_env(),
                 stdout=handle,
@@ -265,10 +293,13 @@ def _run_report_to_file(args, output_name):
 
 def _run_report_list_csv(list_type):
     def _worker():
+        cmd = _tool_cmd("report.py", "ig-tracker-report.exe")
+        if not cmd:
+            return
         _ensure_reports_dir()
         output_path = REPORTS_DIR / f"current_{list_type}.csv"
         subprocess.run(
-            [sys.executable, "-u", "report.py", "list", "--type", list_type, "--out-csv", str(output_path)],
+            [*cmd, "list", "--type", list_type, "--out-csv", str(output_path)],
             cwd=str(ROOT_DIR),
             env=_tracker_env(),
         )
