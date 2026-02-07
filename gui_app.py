@@ -188,11 +188,43 @@ def _parse_db_utc_dt(value):
     return dt_value
 
 
+def _local_tz():
+    return datetime.now().astimezone().tzinfo
+
+
 def _to_local_day(value):
     dt_value = _parse_db_utc_dt(value)
     if not dt_value:
         return None
     return dt_value.astimezone().date().isoformat()
+
+
+def _to_local_iso_datetime(value):
+    dt_value = _parse_db_utc_dt(value)
+    if not dt_value:
+        return None
+    return dt_value.astimezone().strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _local_iso_to_utc_naive(value: str):
+    dt_value = _parse_dt(value)
+    if not dt_value:
+        return None
+    if dt_value.tzinfo is None:
+        dt_value = dt_value.replace(tzinfo=_local_tz())
+    return dt_value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _local_day_to_utc_range(day_str: str):
+    day_local = datetime.fromisoformat(day_str).date()
+    start_local = datetime.combine(day_local, datetime.min.time(), tzinfo=_local_tz())
+    end_local = datetime.combine(day_local, datetime.max.time(), tzinfo=_local_tz())
+    start_utc = start_local.astimezone(timezone.utc).replace(tzinfo=None)
+    end_utc = end_local.astimezone(timezone.utc).replace(tzinfo=None)
+    return (
+        start_utc.strftime("%Y-%m-%d %H:%M:%S.%f"),
+        end_utc.strftime("%Y-%m-%d %H:%M:%S.%f"),
+    )
 
 
 def _format_dt(dt_value):
@@ -249,9 +281,11 @@ def _read_last_success_run():
 
 
 def _report_time_range(days: int):
-    end = _utcnow_naive().replace(microsecond=0)
-    start = (end - timedelta(days=days)).replace(microsecond=0)
-    return start.isoformat(), end.isoformat()
+    end_local = datetime.now().astimezone().replace(microsecond=0)
+    start_local = (end_local - timedelta(days=days)).replace(microsecond=0)
+    end_utc = end_local.astimezone(timezone.utc).replace(tzinfo=None)
+    start_utc = start_local.astimezone(timezone.utc).replace(tzinfo=None)
+    return start_utc.isoformat(), end_utc.isoformat()
 
 
 def _timestamp():
@@ -457,7 +491,7 @@ class TrackerGUI:
         ttk.Button(db_tools_frame, text="DB integrity check", command=self._db_integrity_check).pack(side="left", padx=4, pady=4)
         ttk.Button(db_tools_frame, text="DB vacuum", command=self._db_vacuum).pack(side="left", padx=4, pady=4)
 
-        range_frame = ttk.LabelFrame(self.root, text="New/Lost in range (UTC)")
+        range_frame = ttk.LabelFrame(self.root, text="New/Lost in range (local time)")
         range_frame.pack(fill="x", **padding)
         ttk.Label(range_frame, text="From (date):").pack(side="left", padx=4)
         self.range_from_cb = ttk.Combobox(
@@ -493,7 +527,7 @@ class TrackerGUI:
         ttk.Button(range_frame, text="New", command=self._new_in_range).pack(side="left", padx=4)
         ttk.Button(range_frame, text="Lost", command=self._lost_in_range).pack(side="left", padx=4)
 
-        day_frame = ttk.LabelFrame(self.root, text="Day details (UTC day)")
+        day_frame = ttk.LabelFrame(self.root, text="Day details (local day)")
         day_frame.pack(fill="x", **padding)
         ttk.Label(day_frame, text="Date:").pack(side="left", padx=4)
         self.day_cb = ttk.Combobox(
@@ -589,7 +623,7 @@ class TrackerGUI:
         self.daily_lost_tree.column("at", width=145, anchor="center")
         self.daily_lost_tree.pack(fill="both", expand=True)
 
-        snap_frame = ttk.LabelFrame(self.root, text="Snapshot at time (UTC)")
+        snap_frame = ttk.LabelFrame(self.root, text="Snapshot at time (local)")
         snap_frame.pack(fill="x", **padding)
         ttk.Label(snap_frame, text="At (date or ISO):").pack(side="left", padx=4)
         self.snapshot_cb = ttk.Combobox(
@@ -833,24 +867,37 @@ class TrackerGUI:
             try:
                 conn = sqlite3.connect(str(DB_PATH), timeout=1)
                 try:
-                    rows = conn.execute(
-                        "SELECT DISTINCT date(timestamp) AS day FROM counts ORDER BY day DESC"
+                    run_rows = conn.execute(
+                        "SELECT run_started_at FROM run_history ORDER BY run_started_at DESC LIMIT 5000"
                     ).fetchall()
-                    if not rows:
-                        rows = conn.execute(
-                            "SELECT DISTINCT date(run_started_at) AS day FROM run_history ORDER BY day DESC"
+                    if not run_rows:
+                        run_rows = conn.execute(
+                            "SELECT timestamp FROM counts ORDER BY timestamp DESC LIMIT 5000"
                         ).fetchall()
                     target_rows = conn.execute(
                         "SELECT username FROM targets ORDER BY username"
                     ).fetchall()
-                    run_rows = conn.execute(
+                    snapshot_rows = conn.execute(
                         "SELECT run_started_at FROM run_history ORDER BY run_started_at DESC LIMIT 200"
                     ).fetchall()
                 finally:
                     conn.close()
-                dates = [row[0] for row in rows if row and row[0]]
+                day_values = []
+                for row in run_rows:
+                    if not row or not row[0]:
+                        continue
+                    day_value = _to_local_day(row[0])
+                    if day_value:
+                        day_values.append(day_value)
+                dates = sorted(set(day_values), reverse=True)
                 targets = [row[0] for row in target_rows if row and row[0]]
-                run_times = [row[0] for row in run_rows if row and row[0]]
+                run_times = []
+                for row in snapshot_rows:
+                    if not row or not row[0]:
+                        continue
+                    local_ts = _to_local_iso_datetime(row[0])
+                    if local_ts:
+                        run_times.append(local_ts)
             except Exception:
                 dates = []
                 targets = []
@@ -862,7 +909,7 @@ class TrackerGUI:
         else:
             targets = [""] + targets
         if not run_times:
-            run_times = [_utcnow_naive().replace(microsecond=0).isoformat()]
+            run_times = [datetime.now().replace(microsecond=0).isoformat()]
 
         self.available_dates = dates
         self.available_targets = targets
@@ -1095,6 +1142,7 @@ class TrackerGUI:
             type_sql = " AND ff.is_follower = 1"
         elif list_type == "followings":
             type_sql = " AND ff.is_follower = 0"
+        start_utc, end_utc = _local_day_to_utc_range(day_str)
 
         conn = sqlite3.connect(str(DB_PATH), timeout=2)
         try:
@@ -1104,19 +1152,17 @@ class TrackerGUI:
                 FROM followers_followings ff
                 JOIN targets t ON t.id = ff.target_id
                 WHERE ff.{ts_col} IS NOT NULL
+                  AND ff.{ts_col} >= ?
+                  AND ff.{ts_col} <= ?
                   AND (? = '' OR t.username = ?)
                   {type_sql}
                 ORDER BY ff.{ts_col} ASC, ff.follower_following_username ASC
                 """,
-                (target_name, target_name),
+                (start_utc, end_utc, target_name, target_name),
             ).fetchall()
         finally:
             conn.close()
-        filtered_rows = []
-        for username, is_follower, ts_value in rows:
-            if _to_local_day(ts_value) == day_str:
-                filtered_rows.append((username, is_follower, ts_value))
-        return filtered_rows
+        return rows
 
     def _load_daily_compare(self, show_message=True):
         prev_day = self._selected_daily_day() or (self.day_var.get() or "").strip()
@@ -1355,8 +1401,8 @@ class TrackerGUI:
         self._run_report_to_text(["daily", "--days", str(days)], f"Daily counts last {days} days")
 
     def _snapshot_now(self):
-        at = _utcnow_naive().replace(microsecond=0).isoformat()
-        self._run_report_to_text(["snapshot", "--at", at, "--type", "both"], "Snapshot now")
+        at_utc = datetime.now().astimezone().astimezone(timezone.utc).replace(tzinfo=None, microsecond=0).isoformat()
+        self._run_report_to_text(["snapshot", "--at", at_utc, "--type", "both"], "Snapshot now")
 
     def _list_csv(self):
         list_type = self.list_type_var.get() or "both"
@@ -1373,9 +1419,14 @@ class TrackerGUI:
         if not from_dt or not to_dt:
             self._set_message("Please fill From and To (ISO).")
             return
+        from_utc = _local_iso_to_utc_naive(from_dt)
+        to_utc = _local_iso_to_utc_naive(to_dt)
+        if not from_utc or not to_utc:
+            self._set_message("Invalid local date/time format.")
+            return
         rtype = self.range_type_var.get() or "both"
         target = (self.range_target_var.get() or "").strip()
-        args = ["new", "--from", from_dt, "--to", to_dt, "--type", rtype]
+        args = ["new", "--from", from_utc.isoformat(), "--to", to_utc.isoformat(), "--type", rtype]
         if target:
             args += ["--target", target]
         self._run_report_to_text(args, "New in range")
@@ -1385,9 +1436,14 @@ class TrackerGUI:
         if not from_dt or not to_dt:
             self._set_message("Please fill From and To (ISO).")
             return
+        from_utc = _local_iso_to_utc_naive(from_dt)
+        to_utc = _local_iso_to_utc_naive(to_dt)
+        if not from_utc or not to_utc:
+            self._set_message("Invalid local date/time format.")
+            return
         rtype = self.range_type_var.get() or "both"
         target = (self.range_target_var.get() or "").strip()
-        args = ["lost", "--from", from_dt, "--to", to_dt, "--type", rtype]
+        args = ["lost", "--from", from_utc.isoformat(), "--to", to_utc.isoformat(), "--type", rtype]
         if target:
             args += ["--target", target]
         self._run_report_to_text(args, "Lost in range")
@@ -1397,12 +1453,14 @@ class TrackerGUI:
         if not day:
             self._set_message("Please enter date YYYY-MM-DD.")
             return
+        try:
+            from_utc, to_utc = _local_day_to_utc_range(day)
+        except ValueError:
+            self._set_message("Invalid date format. Use YYYY-MM-DD.")
+            return
         rtype = self.day_type_var.get() or "both"
         target = (self.day_target_var.get() or "").strip()
-        args = ["day", "--date", day, "--type", rtype]
-        if target:
-            args += ["--target", target]
-        self._run_report_to_text(args, f"Day details {day}")
+        self._run_local_day_details_report(day, from_utc, to_utc, rtype, target)
 
     def _snapshot_custom(self):
         at = (self.snapshot_var.get() or "").strip()
@@ -1412,7 +1470,11 @@ class TrackerGUI:
         if at:
             if len(at) == 10:
                 at = f"{at}T00:00:00"
-            args += ["--at", at]
+            at_utc = _local_iso_to_utc_naive(at)
+            if not at_utc:
+                self._set_message("Invalid local date/time for snapshot.")
+                return
+            args += ["--at", at_utc.isoformat()]
         if target:
             args += ["--target", target]
         self._run_report_to_text(args, f"Snapshot {at or 'now'}")
@@ -1437,8 +1499,9 @@ class TrackerGUI:
 
         def _worker():
             env = _tracker_env({"RICH_COLOR_SYSTEM": "none", "TERM": "dumb"})
+            run_args = ["--tz", "local", *args] if "--tz" not in args else args
             result = subprocess.run(
-                [sys.executable, "-u", "report.py", *args],
+                [sys.executable, "-u", "report.py", *run_args],
                 cwd=str(ROOT_DIR),
                 env=env,
                 capture_output=True,
@@ -1455,6 +1518,57 @@ class TrackerGUI:
             def _update():
                 self._set_output(text_out)
                 self._set_message("Report ready.")
+
+            self.root.after(0, _update)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _run_local_day_details_report(self, local_day, from_utc, to_utc, rtype, target):
+        self._set_message("Running local day report...")
+
+        def _worker():
+            env = _tracker_env({"RICH_COLOR_SYSTEM": "none", "TERM": "dumb"})
+            sections = []
+            for label, command in [
+                (
+                    f"New on local day {local_day}",
+                    ["new", "--from", from_utc, "--to", to_utc, "--type", rtype],
+                ),
+                (
+                    f"Lost on local day {local_day}",
+                    ["lost", "--from", from_utc, "--to", to_utc, "--type", rtype],
+                ),
+            ]:
+                if target:
+                    command += ["--target", target]
+                command = ["--tz", "local", *command]
+                result = subprocess.run(
+                    [sys.executable, "-u", "report.py", *command],
+                    cwd=str(ROOT_DIR),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                section_text = result.stdout or ""
+                if result.stderr:
+                    section_text += "\n[stderr]\n" + result.stderr
+                sections.append((label, section_text.strip(), result.returncode))
+
+            header = f"Local day details {local_day} ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})\n"
+            text_out = header + ("-" * len(header)) + "\n"
+            max_code = 0
+            for label, section_text, code in sections:
+                max_code = max(max_code, code)
+                text_out += f"\n[{label}]\n{section_text}\n"
+
+            def _update():
+                self._set_output(text_out)
+                if max_code == 0:
+                    self._set_message("Local day report ready.")
+                else:
+                    self._set_message("Local day report finished with errors.")
 
             self.root.after(0, _update)
 
