@@ -9,8 +9,6 @@ from rich.table import Table
 from rich.prompt import Prompt
 from rich import box
 import questionary
-from sqlalchemy import func
-
 from database import Database, FollowerFollowing, Target, RunHistory, Counts
 
 console = Console()
@@ -47,6 +45,32 @@ def utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _as_aware_utc(ts) -> Optional[datetime]:
+    if ts is None:
+        return None
+    dt = ts if isinstance(ts, datetime) else datetime.fromisoformat(str(ts))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _to_tz_day(ts, tz_name: Optional[str]):
+    dt = _as_aware_utc(ts)
+    if dt is None:
+        return None
+    return dt.astimezone(_resolve_tz(tz_name)).date()
+
+
+def _local_day_bounds_to_utc_naive(day_value: date, tz_name: Optional[str]):
+    tz = _resolve_tz(tz_name)
+    start_local = datetime.combine(day_value, dt_time.min, tzinfo=tz)
+    end_local = datetime.combine(day_value, dt_time.max, tzinfo=tz)
+    return (
+        start_local.astimezone(timezone.utc).replace(tzinfo=None),
+        end_local.astimezone(timezone.utc).replace(tzinfo=None),
+    )
+
+
 def resolve_time(ts: Optional[str]) -> datetime:
     return parse_iso(ts) if ts else utcnow_naive()
 
@@ -56,16 +80,16 @@ def resolve_range(from_date: Optional[str], to_date: Optional[str], days: Option
         return parse_iso(from_date), parse_iso(to_date)
     if days is None:
         days = 7
-    end = utcnow_naive()
-    start = end - timedelta(days=days)
+    end_local = datetime.now(_resolve_tz("local"))
+    start_local = end_local - timedelta(days=days)
+    end = end_local.astimezone(timezone.utc).replace(tzinfo=None)
+    start = start_local.astimezone(timezone.utc).replace(tzinfo=None)
     return start, end
 
 
-def resolve_day(day_str: str) -> Tuple[datetime, datetime]:
+def resolve_day(day_str: str, tz_name: Optional[str] = "local") -> Tuple[datetime, datetime]:
     day_dt = datetime.fromisoformat(day_str).date()
-    start = datetime.combine(day_dt, dt_time.min)
-    end = start + timedelta(days=1) - timedelta(microseconds=1)
-    return start, end
+    return _local_day_bounds_to_utc_naive(day_dt, tz_name)
 
 
 def build_table(title: str, columns: List[str]):
@@ -177,14 +201,18 @@ def cmd_snapshot(db: Database, args):
 
 def cmd_summary(db: Database, args):
     days = args.days
-    end = utcnow_naive()
-    start = end - timedelta(days=days)
+    tz_name = getattr(args, "tz", "local")
+    tz = _resolve_tz(tz_name)
+    end_local = datetime.now(tz)
+    start_local = end_local - timedelta(days=days)
+    end = end_local.astimezone(timezone.utc).replace(tzinfo=None)
+    start = start_local.astimezone(timezone.utc).replace(tzinfo=None)
     q_new = db.session.query(FollowerFollowing.first_seen_run_at, FollowerFollowing.is_follower)
     q_lost = db.session.query(FollowerFollowing.lost_at_run_at, FollowerFollowing.is_follower)
 
     buckets = {}
-    day_cursor = start.date()
-    while day_cursor <= end.date():
+    day_cursor = start_local.date()
+    while day_cursor <= end_local.date():
         buckets[day_cursor] = {
             "new_followers": 0,
             "new_followings": 0,
@@ -196,7 +224,7 @@ def cmd_summary(db: Database, args):
     for ts, is_follower in q_new.filter(FollowerFollowing.first_seen_run_at >= start).all():
         if ts is None:
             continue
-        day = ts.date()
+        day = _to_tz_day(ts, tz_name)
         if day in buckets:
             key = "new_followers" if is_follower else "new_followings"
             buckets[day][key] += 1
@@ -204,7 +232,7 @@ def cmd_summary(db: Database, args):
     for ts, is_follower in q_lost.filter(FollowerFollowing.lost_at_run_at != None, FollowerFollowing.lost_at_run_at >= start).all():
         if ts is None:
             continue
-        day = ts.date()
+        day = _to_tz_day(ts, tz_name)
         if day in buckets:
             key = "lost_followers" if is_follower else "lost_followings"
             buckets[day][key] += 1
@@ -218,40 +246,25 @@ def cmd_summary(db: Database, args):
 
 def cmd_daily_counts(db: Database, args):
     start, end = resolve_range(getattr(args, "from_date", None), getattr(args, "to_date", None), getattr(args, "days", None))
-
-    sub = (
-        db.session.query(
-            func.date(Counts.timestamp).label("day"),
-            Counts.count_type.label("count_type"),
-            Counts.target_id.label("target_id"),
-            func.max(Counts.timestamp).label("max_ts"),
-        )
-        .filter(Counts.timestamp >= start, Counts.timestamp <= end)
-        .group_by(func.date(Counts.timestamp), Counts.count_type, Counts.target_id)
-    )
-
+    tz_name = getattr(args, "tz", "local")
+    q = db.session.query(Counts.timestamp, Counts.count_type, Counts.target_id, Counts.count)
+    q = q.filter(Counts.timestamp >= start, Counts.timestamp <= end)
     if args.target:
-        sub = sub.join(Target, Target.id == Counts.target_id).filter(Target.username == args.target)
+        q = q.join(Target, Target.id == Counts.target_id).filter(Target.username == args.target)
 
-    sub = sub.subquery()
+    raw_rows = q.order_by(Counts.timestamp.asc()).all()
+    latest_per_key = {}
+    for ts, count_type, target_id, count in raw_rows:
+        day = _to_tz_day(ts, tz_name)
+        if day is None:
+            continue
+        key = (str(day), count_type, target_id)
+        prev = latest_per_key.get(key)
+        aware_ts = _as_aware_utc(ts)
+        if prev is None or (aware_ts and aware_ts > prev[0]):
+            latest_per_key[key] = (aware_ts, count)
 
-    q = (
-        db.session.query(
-            sub.c.day,
-            sub.c.count_type,
-            sub.c.target_id,
-            Counts.count,
-        )
-        .join(
-            Counts,
-            (Counts.target_id == sub.c.target_id)
-            & (Counts.count_type == sub.c.count_type)
-            & (Counts.timestamp == sub.c.max_ts),
-        )
-        .join(Target, Target.id == sub.c.target_id)
-    )
-
-    rows = q.all()
+    rows = [(day, count_type, target_id, values[1]) for (day, count_type, target_id), values in latest_per_key.items()]
     if not rows:
         console.print("[yellow]No daily counts found for the selected range.[/yellow]")
         return
@@ -270,16 +283,18 @@ def cmd_daily_counts(db: Database, args):
         elif count_type == "followings":
             data[key]["followings"] = count
 
+    local_start_day = _to_tz_day(start, tz_name)
+    local_end_day = _to_tz_day(end, tz_name)
     if args.target:
         table = build_table(
-            f"Daily counts ({start.date()} to {end.date()})",
+            f"Daily counts ({local_start_day} to {local_end_day})",
             ["date", "followers", "followings"],
         )
         for (day, _target), vals in sorted(data.items()):
             table.add_row(day, str(vals["followers"] or "-"), str(vals["followings"] or "-"))
     else:
         table = build_table(
-            f"Daily counts ({start.date()} to {end.date()})",
+            f"Daily counts ({local_start_day} to {local_end_day})",
             ["date", "target", "followers", "followings"],
         )
         for (day, target_name), vals in sorted(data.items()):
@@ -288,7 +303,7 @@ def cmd_daily_counts(db: Database, args):
 
 
 def cmd_day_details(db: Database, args):
-    start, end = resolve_day(args.date)
+    start, end = resolve_day(args.date, args.tz)
 
     console.print(f"[bold]Daily counts for {args.date}[/bold]")
     daily_args = argparse.Namespace(
