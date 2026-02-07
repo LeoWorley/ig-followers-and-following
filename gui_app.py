@@ -178,6 +178,23 @@ def _parse_dt(value):
     return None
 
 
+def _parse_db_utc_dt(value):
+    dt_value = _parse_dt(value)
+    if not dt_value:
+        return None
+    if dt_value.tzinfo is None:
+        # DB values are stored in UTC; treat naive timestamps as UTC.
+        dt_value = dt_value.replace(tzinfo=timezone.utc)
+    return dt_value
+
+
+def _to_local_day(value):
+    dt_value = _parse_db_utc_dt(value)
+    if not dt_value:
+        return None
+    return dt_value.astimezone().date().isoformat()
+
+
 def _format_dt(dt_value):
     if not dt_value:
         return "unknown"
@@ -555,7 +572,7 @@ class TrackerGUI:
         self.daily_new_tree = ttk.Treeview(new_box, columns=("type", "username", "at"), show="headings", height=6)
         self.daily_new_tree.heading("type", text="Type")
         self.daily_new_tree.heading("username", text="Username")
-        self.daily_new_tree.heading("at", text="Seen at (UTC)")
+        self.daily_new_tree.heading("at", text="Seen at (local)")
         self.daily_new_tree.column("type", width=75, anchor="center")
         self.daily_new_tree.column("username", width=160, anchor="w")
         self.daily_new_tree.column("at", width=145, anchor="center")
@@ -566,7 +583,7 @@ class TrackerGUI:
         self.daily_lost_tree = ttk.Treeview(lost_box, columns=("type", "username", "at"), show="headings", height=6)
         self.daily_lost_tree.heading("type", text="Type")
         self.daily_lost_tree.heading("username", text="Username")
-        self.daily_lost_tree.heading("at", text="Lost at (UTC)")
+        self.daily_lost_tree.heading("at", text="Lost at (local)")
         self.daily_lost_tree.column("type", width=75, anchor="center")
         self.daily_lost_tree.column("username", width=160, anchor="w")
         self.daily_lost_tree.column("at", width=145, anchor="center")
@@ -1008,29 +1025,23 @@ class TrackerGUI:
         try:
             new_rows = conn.execute(
                 """
-                SELECT date(ff.first_seen_run_at) AS day,
-                       ff.is_follower,
-                       COUNT(1) AS cnt
+                SELECT ff.first_seen_run_at,
+                       ff.is_follower
                 FROM followers_followings ff
                 JOIN targets t ON t.id = ff.target_id
                 WHERE ff.first_seen_run_at IS NOT NULL
                   AND (? = '' OR t.username = ?)
-                GROUP BY day, ff.is_follower
-                ORDER BY day ASC
                 """,
                 (target_name, target_name),
             ).fetchall()
             lost_rows = conn.execute(
                 """
-                SELECT date(ff.lost_at_run_at) AS day,
-                       ff.is_follower,
-                       COUNT(1) AS cnt
+                SELECT ff.lost_at_run_at,
+                       ff.is_follower
                 FROM followers_followings ff
                 JOIN targets t ON t.id = ff.target_id
                 WHERE ff.lost_at_run_at IS NOT NULL
                   AND (? = '' OR t.username = ?)
-                GROUP BY day, ff.is_follower
-                ORDER BY day ASC
                 """,
                 (target_name, target_name),
             ).fetchall()
@@ -1038,18 +1049,24 @@ class TrackerGUI:
             conn.close()
 
         daily = {}
-        for day, is_follower, cnt in new_rows:
+        for ts_value, is_follower in new_rows:
+            day = _to_local_day(ts_value)
+            if not day:
+                continue
             entry = daily.setdefault(day, {"new_followers": 0, "lost_followers": 0, "new_followings": 0, "lost_followings": 0})
             if int(is_follower) == 1:
-                entry["new_followers"] = cnt
+                entry["new_followers"] += 1
             else:
-                entry["new_followings"] = cnt
-        for day, is_follower, cnt in lost_rows:
+                entry["new_followings"] += 1
+        for ts_value, is_follower in lost_rows:
+            day = _to_local_day(ts_value)
+            if not day:
+                continue
             entry = daily.setdefault(day, {"new_followers": 0, "lost_followers": 0, "new_followings": 0, "lost_followings": 0})
             if int(is_follower) == 1:
-                entry["lost_followers"] = cnt
+                entry["lost_followers"] += 1
             else:
-                entry["lost_followings"] = cnt
+                entry["lost_followings"] += 1
 
         ordered_days = sorted(daily.keys())
         result = []
@@ -1087,16 +1104,19 @@ class TrackerGUI:
                 FROM followers_followings ff
                 JOIN targets t ON t.id = ff.target_id
                 WHERE ff.{ts_col} IS NOT NULL
-                  AND date(ff.{ts_col}) = date(?)
                   AND (? = '' OR t.username = ?)
                   {type_sql}
                 ORDER BY ff.{ts_col} ASC, ff.follower_following_username ASC
                 """,
-                (day_str, target_name, target_name),
+                (target_name, target_name),
             ).fetchall()
         finally:
             conn.close()
-        return rows
+        filtered_rows = []
+        for username, is_follower, ts_value in rows:
+            if _to_local_day(ts_value) == day_str:
+                filtered_rows.append((username, is_follower, ts_value))
+        return filtered_rows
 
     def _load_daily_compare(self, show_message=True):
         prev_day = self._selected_daily_day() or (self.day_var.get() or "").strip()
@@ -1189,10 +1209,10 @@ class TrackerGUI:
 
         for username, is_follower, ts in new_rows:
             ff_type = "follower" if int(is_follower) == 1 else "following"
-            self.daily_new_tree.insert("", "end", values=(ff_type, username, str(ts)))
+            self.daily_new_tree.insert("", "end", values=(ff_type, username, _format_dt(_parse_db_utc_dt(ts))))
         for username, is_follower, ts in lost_rows:
             ff_type = "follower" if int(is_follower) == 1 else "following"
-            self.daily_lost_tree.insert("", "end", values=(ff_type, username, str(ts)))
+            self.daily_lost_tree.insert("", "end", values=(ff_type, username, _format_dt(_parse_db_utc_dt(ts))))
 
         self._set_message(f"Day {day}: {len(new_rows)} new, {len(lost_rows)} lost.")
 
