@@ -191,7 +191,7 @@ Small monitor/controller with report shortcuts.
 
 ## Packaging (standalone binaries)
 
-You can build executables/app bundles with PyInstaller:
+Build standalone executables with PyInstaller (`--onefile`):
 
 - Windows:
   - `.\build_apps.ps1`
@@ -201,6 +201,41 @@ You can build executables/app bundles with PyInstaller:
 Use skip-install mode if PyInstaller is already installed:
 - PowerShell: `.\build_apps.ps1 -SkipInstall`
 - Bash: `./build_apps.sh --skip-install`
+
+Generated executables:
+- `dist\ig-tracker-gui.exe`
+- `dist\ig-tracker-tray.exe`
+- `dist\ig-tracker-cli.exe`
+- `dist\ig-tracker-report.exe`
+- `dist\ig-tracker-db-tools.exe`
+
+### Windows installer + release artifacts
+
+1. Install Inno Setup 6 (for installer EXE):
+   - https://jrsoftware.org/isdl.php
+2. Build release artifacts:
+```powershell
+.\build_windows_release.ps1 -Version 1.0.0
+```
+3. Outputs:
+   - portable zip: `release\windows\ig-tracker-windows-v1.0.0-portable.zip`
+   - installer exe (if Inno Setup found): `release\windows\ig-tracker-setup-v1.0.0.exe`
+
+If you only want the portable zip:
+```powershell
+.\build_windows_release.ps1 -Version 1.0.0 -NoInstaller
+```
+
+### Publish first GitHub release (Windows EXE)
+
+1. Push commits/tags:
+```powershell
+git tag v1.0.0
+git push origin main --tags
+```
+2. Create release on GitHub and upload:
+   - `release\windows\ig-tracker-setup-v1.0.0.exe`
+   - `release\windows\ig-tracker-windows-v1.0.0-portable.zip`
 
 ## Reports (`report.py`)
 

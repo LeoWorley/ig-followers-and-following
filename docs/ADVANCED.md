@@ -37,6 +37,16 @@ python db_tools.py cleanup-targets --dest instagram_tracker.db --apply
 ./build_apps.sh
 ```
 
+- Build Windows release artifacts (portable zip + installer EXE):
+```powershell
+.\build_windows_release.ps1 -Version 1.0.0
+```
+
+- Build zip only (no installer):
+```powershell
+.\build_windows_release.ps1 -Version 1.0.0 -NoInstaller
+```
+
 ## Reporting CLI
 
 - `summary`, `daily`, `day`, `new`, `lost`, `snapshot`, `list`

@@ -19,12 +19,14 @@ reports/
 
 # logs
 tracker.log
+tracker.lock
 *.log
 
 # packaging
 build/
 dist/
 *.spec
+release/
 
 # OS junk
 .DS_Store
