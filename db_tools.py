@@ -284,6 +284,99 @@ def vacuum_db(dest_path: Path) -> dict:
     }
 
 
+def rollback_lost(
+    dest_path: Path,
+    run_started_at: str | None,
+    from_ts: str | None,
+    to_ts: str | None,
+    target: str | None,
+    apply: bool,
+    backup: bool,
+) -> dict:
+    if not dest_path.exists():
+        raise FileNotFoundError(f"Destination DB not found: {dest_path}")
+    if not run_started_at and (not from_ts or not to_ts):
+        raise ValueError("Provide --run-started-at or both --from and --to.")
+
+    where = ["ff.is_lost = 1", "ff.lost_at_run_at IS NOT NULL"]
+    params = []
+    if run_started_at:
+        where.append("ff.lost_at_run_at = ?")
+        params.append(run_started_at)
+    else:
+        where.append("ff.lost_at_run_at >= ?")
+        where.append("ff.lost_at_run_at <= ?")
+        params.extend([from_ts, to_ts])
+    if target:
+        where.append("t.username = ?")
+        params.append(target)
+    where_sql = " AND ".join(where)
+
+    conn = sqlite3.connect(str(dest_path))
+    try:
+        counts_row = conn.execute(
+            f"""
+            SELECT
+              COUNT(1) AS total_rows,
+              SUM(CASE WHEN ff.is_follower = 1 THEN 1 ELSE 0 END) AS followers_rows,
+              SUM(CASE WHEN ff.is_follower = 0 THEN 1 ELSE 0 END) AS followings_rows
+            FROM followers_followings ff
+            JOIN targets t ON t.id = ff.target_id
+            WHERE {where_sql}
+            """,
+            params,
+        ).fetchone()
+        run_rows = conn.execute(
+            f"""
+            SELECT ff.lost_at_run_at, COUNT(1) AS row_count
+            FROM followers_followings ff
+            JOIN targets t ON t.id = ff.target_id
+            WHERE {where_sql}
+            GROUP BY ff.lost_at_run_at
+            ORDER BY ff.lost_at_run_at ASC
+            """,
+            params,
+        ).fetchall()
+        result = {
+            "total_rows": int(counts_row[0] or 0),
+            "followers_rows": int(counts_row[1] or 0),
+            "followings_rows": int(counts_row[2] or 0),
+            "runs": run_rows,
+            "applied": apply,
+            "backup_path": None,
+        }
+        if result["total_rows"] == 0:
+            return result
+        if not apply:
+            return result
+
+        if backup:
+            backup_path = dest_path.with_name(f"{dest_path.stem}.bak_{_timestamp()}{dest_path.suffix}")
+            shutil.copy2(dest_path, backup_path)
+            result["backup_path"] = str(backup_path)
+
+        with conn:
+            conn.execute(
+                f"""
+                UPDATE followers_followings
+                SET is_lost = 0,
+                    lost_at = NULL,
+                    lost_at_run_at = NULL,
+                    estimated_removed_at = NULL
+                WHERE id IN (
+                    SELECT ff.id
+                    FROM followers_followings ff
+                    JOIN targets t ON t.id = ff.target_id
+                    WHERE {where_sql}
+                )
+                """,
+                params,
+            )
+        return result
+    finally:
+        conn.close()
+
+
 def merge_db(dest_path: Path, src_path: Path, backup: bool) -> dict:
     if not dest_path.exists():
         raise FileNotFoundError(f"Destination DB not found: {dest_path}")
@@ -555,6 +648,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_vacuum = sub.add_parser("vacuum", help="Run SQLite VACUUM + ANALYZE")
     p_vacuum.add_argument("--dest", default=DEFAULT_DB, help="Destination DB path (default: instagram_tracker.db)")
 
+    p_rollback = sub.add_parser("rollback-lost", help="Preview or revert lost flags for specific bad runs")
+    p_rollback.add_argument("--dest", default=DEFAULT_DB, help="Destination DB path (default: instagram_tracker.db)")
+    p_rollback.add_argument("--run-started-at", help="Exact run timestamp to rollback (e.g. 2026-02-08 18:29:36.780107)")
+    p_rollback.add_argument("--from", dest="from_ts", help="Start timestamp for rollback window (inclusive)")
+    p_rollback.add_argument("--to", dest="to_ts", help="End timestamp for rollback window (inclusive)")
+    p_rollback.add_argument("--target", help="Optional target username filter")
+    p_rollback.add_argument("--apply", action="store_true", help="Apply rollback (default is preview only)")
+    p_rollback.add_argument("--no-backup", action="store_true", help="Do not create backup when applying rollback")
+
     return parser
 
 
@@ -635,6 +737,31 @@ def main():
         print(f"Size before: {result['before_size']} bytes")
         print(f"Size after: {result['after_size']} bytes")
         print(f"Saved: {result['saved_bytes']} bytes")
+        return
+
+    if args.command == "rollback-lost":
+        result = rollback_lost(
+            Path(args.dest),
+            run_started_at=args.run_started_at,
+            from_ts=args.from_ts,
+            to_ts=args.to_ts,
+            target=args.target,
+            apply=args.apply,
+            backup=not args.no_backup,
+        )
+        mode = "Applied" if result["applied"] else "Preview"
+        print(f"{mode} rollback-lost:")
+        print(f"- total rows: {result['total_rows']}")
+        print(f"- followers rows: {result['followers_rows']}")
+        print(f"- followings rows: {result['followings_rows']}")
+        if result["runs"]:
+            print("- affected runs:")
+            for run_ts, row_count in result["runs"]:
+                print(f"  - {run_ts}: {row_count}")
+        if result["backup_path"]:
+            print(f"Backup created: {result['backup_path']}")
+        if not result["applied"]:
+            print("No changes applied. Re-run with --apply to execute rollback.")
         return
 
 

@@ -296,6 +296,16 @@ DB vacuum:
 python db_tools.py vacuum --dest instagram_tracker.db
 ```
 
+Rollback lost flags from a bad run (preview):
+```bash
+python db_tools.py rollback-lost --run-started-at "2026-02-08 18:29:36.780107"
+```
+
+Apply rollback:
+```bash
+python db_tools.py rollback-lost --run-started-at "2026-02-08 18:29:36.780107" --apply
+```
+
 Custom target cleanup list:
 ```bash
 python db_tools.py cleanup-targets --dest instagram_tracker.db --usernames followers following bogus_target --apply
