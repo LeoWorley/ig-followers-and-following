@@ -62,6 +62,7 @@ def store_followers(
     run_started_at: datetime = None,
     run_id: int = None,
     prev_run_started_at: Optional[datetime] = None,
+    expected_total: Optional[int] = None,
 ) -> Set[str]:
     """Scrape a followers/followings modal and update DB with run-aware timestamps."""
     print(f"Storing {list_type}...")
@@ -212,6 +213,7 @@ def store_followers(
             .filter_by(target_id=target_id, is_follower=is_follower)
             .all()
         }
+        active_existing_count = sum(1 for entry in existing_items.values() if not entry.is_lost)
 
         # Add new items or update existing ones
         for username in current_items:
@@ -240,19 +242,43 @@ def store_followers(
                 ff.lost_at_run_at = None
         db.session.commit()
 
-        # Mark items that are no longer present as lost
-        for username, entry in existing_items.items():
-            if username not in current_items and not entry.is_lost:
-                entry.is_lost = True
-                entry.lost_at = run_started_at
-                entry.lost_at_run_at = run_started_at
-                if entry.last_seen_run_at is None:
-                    entry.last_seen_run_at = run_started_at
-                if entry.last_seen_run_at:
-                    entry.estimated_removed_at = _midpoint_dt(entry.last_seen_run_at, run_started_at)
-                else:
-                    entry.estimated_removed_at = run_started_at
-        db.session.commit()
+        min_coverage_for_lost = float(os.getenv("SCRAPE_MIN_COVERAGE_FOR_LOST", "0.9"))
+        min_reference_count = int(os.getenv("SCRAPE_MIN_REFERENCE_COUNT_FOR_LOST", "100"))
+        ref_expected = int(expected_total or 0)
+        reference_count = max(ref_expected, active_existing_count)
+        apply_lost = True
+
+        if reference_count >= min_reference_count:
+            if len(current_items) == 0:
+                apply_lost = False
+                print(
+                    f"Safety guard activated for {list_type}: scraped 0 while reference_count={reference_count}. "
+                    "Skipping lost marking for this run."
+                )
+            else:
+                coverage = len(current_items) / float(reference_count)
+                if coverage < min_coverage_for_lost:
+                    apply_lost = False
+                    print(
+                        f"Safety guard activated for {list_type}: coverage={coverage:.3f} "
+                        f"(scraped={len(current_items)}, reference={reference_count}, threshold={min_coverage_for_lost}). "
+                        "Skipping lost marking for this run."
+                    )
+
+        # Mark items that are no longer present as lost (only when scrape coverage is trusted)
+        if apply_lost:
+            for username, entry in existing_items.items():
+                if username not in current_items and not entry.is_lost:
+                    entry.is_lost = True
+                    entry.lost_at = run_started_at
+                    entry.lost_at_run_at = run_started_at
+                    if entry.last_seen_run_at is None:
+                        entry.last_seen_run_at = run_started_at
+                    if entry.last_seen_run_at:
+                        entry.estimated_removed_at = _midpoint_dt(entry.last_seen_run_at, run_started_at)
+                    else:
+                        entry.estimated_removed_at = run_started_at
+            db.session.commit()
 
         print(f"Successfully stored {len(current_items)} {list_type}")
         return current_items

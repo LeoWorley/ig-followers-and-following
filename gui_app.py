@@ -742,6 +742,41 @@ class TrackerGUI:
             pass
         return "Last error: none"
 
+    def _recent_login_issue(self):
+        if not LOG_PATH.exists() or LOG_PATH.stat().st_size == 0:
+            return None
+        try:
+            with open(LOG_PATH, "rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                handle.seek(max(0, size - 131072), os.SEEK_SET)
+                text = handle.read().decode("utf-8", errors="replace")
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            fail_tokens = (
+                "Saved cookies are invalid or expired",
+                "Failed to login, aborting",
+                "Reason: login_failed",
+                "Reason: login_failed_after_cookie_invalid",
+            )
+            success_tokens = (
+                "Successfully logged in using saved cookies!",
+                "Successfully logged in!",
+            )
+            fail_idx = -1
+            fail_line = ""
+            success_idx = -1
+            for idx, line in enumerate(lines):
+                if any(token in line for token in fail_tokens):
+                    fail_idx = idx
+                    fail_line = line
+                if any(token in line for token in success_tokens):
+                    success_idx = idx
+            if fail_idx >= 0 and fail_idx > success_idx:
+                return fail_line
+        except Exception:
+            return None
+        return None
+
     def _freshness_text(self):
         last_success = _read_last_success_run()
         if not last_success:
@@ -787,7 +822,13 @@ class TrackerGUI:
         checks.append(("Dependencies", "PASS" if dep_ok else "FAIL", "selenium + webdriver_manager"))
 
         cookie_ok = (ROOT_DIR / "instagram_cookies.json").exists() and (ROOT_DIR / "instagram_cookies.json").stat().st_size > 10
-        checks.append(("Cookie file", "PASS" if cookie_ok else "WARN", "Run login-only once if missing"))
+        login_issue = self._recent_login_issue()
+        if not cookie_ok:
+            checks.append(("Cookie file", "WARN", "Run login-only once if missing"))
+        elif login_issue:
+            checks.append(("Cookie file", "WARN", f"Present but login failed recently: {login_issue}"))
+        else:
+            checks.append(("Cookie file", "PASS", "Present and no recent login failures found"))
 
         db_exists = DB_PATH.exists()
         run_count = 0

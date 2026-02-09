@@ -190,6 +190,7 @@ class InstagramTracker:
         self.driver_service = None
         self.driver_service_pid = None
         self.cookies_file = 'instagram_cookies.json'
+        self.cookie_invalid_detected = False
         
     def close_modal(self):
         """Attempt to close any open Instagram modal dialog."""
@@ -271,8 +272,17 @@ class InstagramTracker:
             print("Attempting to log in to Instagram...")
             
             # First try to use saved cookies
-            if (not skip_cookie_login) and self.load_cookies():
-                return True
+            if not skip_cookie_login:
+                if self.load_cookies():
+                    return True
+                if self.cookie_invalid_detected:
+                    drop_invalid_cookie = os.getenv("DELETE_INVALID_COOKIE_ON_FAIL", "true").lower() == "true"
+                    if drop_invalid_cookie and os.path.exists(self.cookies_file):
+                        try:
+                            os.remove(self.cookies_file)
+                            print("Deleted invalid cookie file. A new login is required.")
+                        except Exception as e:
+                            print(f"Failed to delete invalid cookie file: {e}")
                 
             print("Performing fresh login...")
             self.driver.get('https://www.instagram.com/')
@@ -403,6 +413,7 @@ class InstagramTracker:
                     return True
                 except TimeoutException:
                     print("Saved cookies are invalid or expired")
+                    self.cookie_invalid_detected = True
                     return False
             return False
         except Exception as e:
@@ -483,7 +494,8 @@ class InstagramTracker:
                         list_type='followers',
                         run_started_at=run_started_at,
                         run_id=run_id,
-                        prev_run_started_at=prev_run_started_at
+                        prev_run_started_at=prev_run_started_at,
+                        expected_total=followers_count,
                     )
                     if followers_list is not None and len(followers_list) > 0:
                         print(f"Successfully scraped {len(followers_list)} followers")
@@ -498,7 +510,8 @@ class InstagramTracker:
                                 list_type='followers',
                                 run_started_at=run_started_at,
                                 run_id=run_id,
-                                prev_run_started_at=prev_run_started_at
+                                prev_run_started_at=prev_run_started_at,
+                                expected_total=followers_count,
                             )
                             print(f"Retry followers scraped: {len(followers_list)}")
                 except Exception as e:
@@ -577,7 +590,8 @@ class InstagramTracker:
                         list_type='followings',
                         run_started_at=run_started_at,
                         run_id=run_id,
-                        prev_run_started_at=prev_run_started_at
+                        prev_run_started_at=prev_run_started_at,
+                        expected_total=followings_count,
                     )
                     if current_followings_list is not None and len(current_followings_list) > 0:
                         print(f"Successfully scraped {len(current_followings_list)} followings")
@@ -592,7 +606,8 @@ class InstagramTracker:
                                 list_type='followings',
                                 run_started_at=run_started_at,
                                 run_id=run_id,
-                                prev_run_started_at=prev_run_started_at
+                                prev_run_started_at=prev_run_started_at,
+                                expected_total=followings_count,
                             )
                             print(f"Retry followings scraped: {len(current_followings_list)}")
                 except Exception as e:
@@ -622,7 +637,7 @@ class InstagramTracker:
             self.setup_driver()
             if not self.login():
                 print("Failed to login, aborting...")
-                result["error"] = "login_failed"
+                result["error"] = "login_failed_after_cookie_invalid" if self.cookie_invalid_detected else "login_failed"
                 return result
             if not self.navigate_to_profile():
                 print("Failed to load target profile, aborting...")
@@ -734,6 +749,7 @@ def main():
             login_only_timeout_seconds = int(login_only_timeout)
         except ValueError:
             print("Invalid LOGIN_ONLY_TIMEOUT_SECONDS; ignoring and waiting indefinitely.")
+    stop_on_auth_failure = os.getenv("STOP_ON_AUTH_FAILURE", "true").lower() == "true"
 
     if login_only_mode:
         tracker = InstagramTracker()
@@ -772,12 +788,26 @@ def main():
         tracker = InstagramTracker()
         run_result = tracker.run()
         if run_result.get("status") != "success":
+            error_reason = str(run_result.get("error", "unknown"))
             send_alert(
                 "tracker_run_failed",
                 "Instagram tracker run failed",
-                f"Run failed. Reason: {run_result.get('error', 'unknown')}",
+                f"Run failed. Reason: {error_reason}",
                 level="error",
             )
+            if error_reason in {"login_failed", "login_failed_after_cookie_invalid"}:
+                send_alert(
+                    "tracker_auth_failed",
+                    "Instagram tracker authentication failed",
+                    (
+                        "Authentication failed (cookie and/or credentials). "
+                        "Run login-only mode again and verify IG_PASSWORD in .env."
+                    ),
+                    level="error",
+                )
+                if stop_on_auth_failure:
+                    print("STOP_ON_AUTH_FAILURE is enabled. Exiting loop after authentication failure.")
+                    break
         elif os.getenv("ALERT_ON_SUCCESS", "false").lower() == "true":
             send_alert(
                 "tracker_run_success",
