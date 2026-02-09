@@ -78,6 +78,11 @@ HEADLESS_MODE=true
   - `SCRAPE_MODAL_WAIT_SECONDS` (default 10)
   - `SCRAPE_STALL_TIMEOUT_SECONDS` (default 15)
   - `SCRAPE_MAX_ITERATIONS` (default 500)
+  - `SCRAPE_MIN_COVERAGE_FOR_LOST` (default 0.9, skips lost marking on low-coverage scrapes)
+  - `SCRAPE_MIN_REFERENCE_COUNT_FOR_LOST` (default 100)
+- Authentication safety:
+  - `STOP_ON_AUTH_FAILURE` (default `true`, exits loop when auth fails)
+  - `DELETE_INVALID_COOKIE_ON_FAIL` (default `true`, removes stale cookie file)
 - Optional SQLite maintenance:
   - `DB_INTEGRITY_CHECK_EVERY_RUNS` (0 disables)
   - `DB_VACUUM_EVERY_RUNS` (0 disables)
@@ -309,6 +314,8 @@ LOGIN_ONLY_MODE=false
 RUN_INTERVAL_MINUTES=60
 RUN_JITTER_SECONDS=120
 TRAY_AUTO_MONITOR_ON_SCHEDULER=true
+STOP_ON_AUTH_FAILURE=true
+SCRAPE_MIN_COVERAGE_FOR_LOST=0.9
 ```
 
 ## Troubleshooting
@@ -319,6 +326,17 @@ Run login-only again with visible browser:
 
 ```bash
 LOGIN_ONLY_MODE=true HEADLESS_MODE=false python main.py
+```
+
+If scheduler mode is enabled, auth failure now stops the loop by default (`STOP_ON_AUTH_FAILURE=true`) and sends alert events. This prevents accidental mass updates from bad sessions.
+
+### Unexpected mass "lost" entries after a bad run
+
+Use scrape safety guard to prevent marking all items as lost when Instagram returns partial/blocked lists:
+
+```env
+SCRAPE_MIN_COVERAGE_FOR_LOST=0.9
+SCRAPE_MIN_REFERENCE_COUNT_FOR_LOST=100
 ```
 
 ### Chrome remains in Task Manager after run
