@@ -254,6 +254,17 @@ def _format_dt(dt_value):
     return dt_value.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _parse_log_timestamp(line: str):
+    if not line or len(line) < 23:
+        return None
+    # Python logging default here: "YYYY-MM-DD HH:MM:SS,mmm ..."
+    stamp = line[:23]
+    try:
+        return datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S,%f").replace(tzinfo=_local_tz())
+    except ValueError:
+        return None
+
+
 def _read_last_run():
     if not DB_PATH.exists():
         return None
@@ -762,17 +773,22 @@ class TrackerGUI:
                 "Successfully logged in using saved cookies!",
                 "Successfully logged in!",
             )
-            fail_idx = -1
-            fail_line = ""
-            success_idx = -1
-            for idx, line in enumerate(lines):
+            fail_line = None
+            fail_ts = None
+            success_ts = None
+            for line in lines:
+                line_ts = _parse_log_timestamp(line)
                 if any(token in line for token in fail_tokens):
-                    fail_idx = idx
                     fail_line = line
+                    fail_ts = line_ts
                 if any(token in line for token in success_tokens):
-                    success_idx = idx
-            if fail_idx >= 0 and fail_idx > success_idx:
-                return fail_line
+                    success_ts = line_ts
+            if fail_line:
+                return {
+                    "line": fail_line,
+                    "fail_ts": fail_ts,
+                    "success_ts": success_ts,
+                }
         except Exception:
             return None
         return None
@@ -821,14 +837,25 @@ class TrackerGUI:
         dep_ok = has_selenium and has_wdm
         checks.append(("Dependencies", "PASS" if dep_ok else "FAIL", "selenium + webdriver_manager"))
 
-        cookie_ok = (ROOT_DIR / "instagram_cookies.json").exists() and (ROOT_DIR / "instagram_cookies.json").stat().st_size > 10
+        cookie_path = ROOT_DIR / "instagram_cookies.json"
+        cookie_ok = cookie_path.exists() and cookie_path.stat().st_size > 10
         login_issue = self._recent_login_issue()
         if not cookie_ok:
             checks.append(("Cookie file", "WARN", "Run login-only once if missing"))
-        elif login_issue:
-            checks.append(("Cookie file", "WARN", f"Present but login failed recently: {login_issue}"))
         else:
-            checks.append(("Cookie file", "PASS", "Present and no recent login failures found"))
+            warn_message = None
+            if login_issue:
+                fail_line = login_issue.get("line")
+                fail_ts = login_issue.get("fail_ts")
+                success_ts = login_issue.get("success_ts")
+                cookie_mtime = datetime.fromtimestamp(cookie_path.stat().st_mtime).astimezone()
+                has_unresolved_fail = fail_ts and (not success_ts or fail_ts > success_ts)
+                if has_unresolved_fail and cookie_mtime <= fail_ts.astimezone():
+                    warn_message = f"Present but login failed recently: {fail_line}"
+            if warn_message:
+                checks.append(("Cookie file", "WARN", warn_message))
+            else:
+                checks.append(("Cookie file", "PASS", "Present and no active login failures found"))
 
         db_exists = DB_PATH.exists()
         run_count = 0
