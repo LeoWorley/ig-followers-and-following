@@ -273,6 +273,53 @@ git push origin main --tags
    - `release\windows\ig-tracker-setup-v1.0.0.exe`
    - `release\windows\ig-tracker-windows-v1.0.0-portable.zip`
 
+## DevOps (GitHub Actions)
+
+This repo includes lightweight CI/CD automation:
+
+- CI workflow: `.github/workflows/ci.yml`
+  - triggers on `push` to `main` and every `pull_request`
+  - installs dependencies from `requirements.txt`
+  - compiles all Python files (`py_compile`) to catch syntax/import-time issues early
+  - runs CLI smoke checks:
+    - `python report.py --help`
+    - `python db_tools.py --help`
+- Release workflow: `.github/workflows/release.yml`
+  - triggers on tags like `v1.0.1`
+  - builds Windows binaries and release artifacts (`.exe` + portable `.zip`)
+  - uploads artifacts to the workflow run
+  - publishes assets to the GitHub Release automatically
+- Dependency automation: `.github/dependabot.yml`
+  - weekly update PRs for Python packages and GitHub Actions
+
+### CI usage
+
+Open a PR to `main`; checks run automatically. Merge only when CI is green.
+
+### CD usage (automatic release by tag)
+
+```powershell
+git add .
+git commit -m "chore(release): v1.0.1"
+git tag -a v1.0.1 -m "Release v1.0.1"
+git push origin main
+git push origin v1.0.1
+```
+
+After the tag push:
+
+- GitHub Actions builds the Windows artifacts.
+- A GitHub Release for `v1.0.1` is created/updated with:
+  - `ig-tracker-setup-v1.0.1.exe`
+  - `ig-tracker-windows-v1.0.1-portable.zip`
+
+### Manual fallback
+
+If Actions is unavailable, you can still build and publish locally using:
+
+- `.\build_windows_release.ps1 -Version X.Y.Z`
+- then upload files from `release\windows\` in the GitHub Releases UI.
+
 ## Reports (`report.py`)
 
 Examples:
