@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate Python Project
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip check
+
+      - name: Compile Python sources
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import py_compile
+          import sys
+
+          skip_dirs = {"venv", ".venv", "build", "dist", "release", ".git"}
+          py_files = []
+          for path in Path(".").rglob("*.py"):
+              if any(part in skip_dirs for part in path.parts):
+                  continue
+              py_files.append(path)
+
+          failures = []
+          for path in sorted(py_files):
+              try:
+                  py_compile.compile(str(path), doraise=True)
+              except Exception as exc:
+                  failures.append((path, exc))
+
+          print(f"Compiled {len(py_files)} files")
+          if failures:
+              for path, exc in failures:
+                  print(f"[FAIL] {path}: {exc}")
+              sys.exit(1)
+          PY
+
+      - name: CLI smoke checks
+        run: |
+          python report.py --help > /dev/null
+          python db_tools.py --help > /dev/null

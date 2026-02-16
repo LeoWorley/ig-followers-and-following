@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (example: 1.0.1)."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows Artifacts
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Resolve version
+        shell: pwsh
+        run: |
+          $isManual = "${{ github.event_name }}" -eq "workflow_dispatch"
+          $version = "${{ inputs.version }}"
+          if ($isManual -and -not $version) {
+            throw "workflow_dispatch requires the version input (example: 1.0.1)."
+          }
+          if (-not $version) {
+            $refName = "${{ github.ref_name }}"
+            if (-not $refName.StartsWith("v")) {
+              throw "Tag-based release expects refs like v1.0.1."
+            }
+            $version = $refName.TrimStart("v")
+          }
+          if (-not $version) {
+            throw "Unable to resolve release version."
+          }
+          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Building version: $version"
+
+      - name: Create venv and install dependencies
+        shell: pwsh
+        run: |
+          python -m venv venv
+          .\venv\Scripts\python.exe -m pip install --upgrade pip
+          .\venv\Scripts\python.exe -m pip install -r requirements.txt
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --yes --no-progress
+
+      - name: Build release artifacts
+        shell: pwsh
+        run: |
+          .\build_windows_release.ps1 -Version $env:APP_VERSION
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-v${{ env.APP_VERSION }}
+          path: |
+            release/windows/ig-tracker-setup-v${{ env.APP_VERSION }}.exe
+            release/windows/ig-tracker-windows-v${{ env.APP_VERSION }}-portable.zip
+          if-no-files-found: warn
+
+      - name: Publish GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: |
+            release/windows/ig-tracker-setup-v${{ env.APP_VERSION }}.exe
+            release/windows/ig-tracker-windows-v${{ env.APP_VERSION }}-portable.zip
