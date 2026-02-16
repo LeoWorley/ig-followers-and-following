@@ -18,7 +18,38 @@ Track changes in followers and following over time, store history in SQLite, and
 
 ## Quick Start (recommended)
 
-### Windows
+### Windows (installer EXE, easiest for non-technical users)
+
+Use this path if you want to install and run the app without Python/venv.
+
+1. Download installer from Releases:
+   - `ig-tracker-setup-vX.Y.Z.exe`
+2. Run installer and complete wizard.
+   - Default install path: `%LOCALAPPDATA%\Programs\IG Tracker`
+   - Optional task in installer: "Run tray app at Windows startup"
+3. Open Start Menu:
+   - `IG Tracker GUI`
+4. In the GUI wizard, click "Open .env", set real values, and save:
+```env
+IG_USERNAME=your_username
+IG_PASSWORD=your_password
+TARGET_ACCOUNT=account_to_track
+```
+5. In GUI, click `Run login-only now`, complete IG login/2FA in browser, wait until cookie is saved.
+6. Click `Run setup checks` and confirm cookie/deps/db checks are healthy.
+7. Choose how to run day-to-day:
+   - GUI-managed run: keep GUI open and use `Start tracker`.
+   - Background run (recommended): create a Task Scheduler task:
+     - Program/script: `%LOCALAPPDATA%\Programs\IG Tracker\ig-tracker-cli.exe`
+     - Start in: `%LOCALAPPDATA%\Programs\IG Tracker`
+     - Trigger: At startup
+     - If already running: `Do not start a new instance`
+8. Optional monitor app:
+   - Start Menu -> `IG Tracker Tray`
+
+If IG password/session changes later, run `Run login-only now` again to refresh cookies.
+
+### Windows (from source repo)
 
 1. Run one-click setup:
 ```powershell
