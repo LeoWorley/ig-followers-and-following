@@ -391,6 +391,7 @@ class TrackerGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title(APP_TITLE)
+        self._configure_window()
         self.status_var = tk.StringVar(value="Status: unknown")
         self.message_var = tk.StringVar(value="")
         self.last_output = ""
@@ -433,283 +434,482 @@ class TrackerGUI:
         if AUTO_START and not MONITOR_ONLY:
             _start_tracker()
 
+    def _configure_window(self):
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        width = min(1280, max(980, screen_w - 80))
+        height = min(860, max(640, screen_h - 120))
+        if screen_w <= 1366:
+            width = min(width, screen_w - 40)
+        if screen_h <= 768:
+            height = min(height, screen_h - 80)
+        pos_x = max(0, (screen_w - width) // 2)
+        pos_y = max(0, (screen_h - height) // 2)
+        self.root.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
+        self.root.minsize(920, 620)
+
+    def _create_notebook(self):
+        notebook = ttk.Notebook(self.root)
+        notebook.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 4))
+        return notebook
+
+    def _create_scrollable_tab(self, title):
+        tab_frame = ttk.Frame(self.notebook)
+        self.notebook.add(tab_frame, text=title)
+        tab_frame.rowconfigure(0, weight=1)
+        tab_frame.columnconfigure(0, weight=1)
+
+        canvas = tk.Canvas(tab_frame, highlightthickness=0, borderwidth=0)
+        scroll = ttk.Scrollbar(tab_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scroll.grid(row=0, column=1, sticky="ns")
+
+        body = ttk.Frame(canvas)
+        window_id = canvas.create_window((0, 0), window=body, anchor="nw")
+
+        def _on_body_configure(_event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _on_canvas_configure(event):
+            canvas.itemconfigure(window_id, width=event.width)
+
+        def _on_mousewheel(event):
+            if event.delta == 0:
+                return
+            step = int(-event.delta / 120)
+            if step == 0:
+                step = -1 if event.delta > 0 else 1
+            canvas.yview_scroll(step, "units")
+
+        def _on_linux_scroll(event):
+            if event.num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                canvas.yview_scroll(1, "units")
+
+        def _bind_scroll(_event):
+            canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            canvas.bind_all("<Button-4>", _on_linux_scroll)
+            canvas.bind_all("<Button-5>", _on_linux_scroll)
+
+        def _unbind_scroll(_event):
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+
+        body.bind("<Configure>", _on_body_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+        canvas.bind("<Enter>", _bind_scroll)
+        canvas.bind("<Leave>", _unbind_scroll)
+        body.bind("<Enter>", _bind_scroll)
+        body.bind("<Leave>", _unbind_scroll)
+        return body
+
+    def _build_form_row(self, parent, row, widgets, max_cols=8):
+        cur_row = row
+        cur_col = 0
+        for widget in widgets:
+            if widget is None:
+                continue
+            widget.grid(row=cur_row, column=cur_col, sticky="w", padx=4, pady=4)
+            cur_col += 1
+            if cur_col >= max_cols:
+                cur_col = 0
+                cur_row += 1
+        return cur_row
+
     def _build_ui(self):
-        padding = {"padx": 8, "pady": 6}
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(1, weight=1)
 
-        status_frame = ttk.Frame(self.root)
-        status_frame.pack(fill="x", **padding)
-        ttk.Label(status_frame, textvariable=self.status_var).pack(side="left")
+        header_frame = ttk.Frame(self.root)
+        header_frame.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
+        header_frame.columnconfigure(0, weight=1)
+        ttk.Label(header_frame, textvariable=self.status_var).grid(row=0, column=0, sticky="w")
+        health_frame = ttk.Frame(header_frame)
+        health_frame.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        health_frame.columnconfigure(1, weight=1)
+        ttk.Label(health_frame, textvariable=self.cookie_status_var).grid(row=0, column=0, sticky="w", padx=(0, 12))
+        ttk.Label(health_frame, textvariable=self.error_status_var).grid(row=0, column=1, sticky="w")
+        ttk.Label(health_frame, textvariable=self.stale_status_var).grid(row=0, column=2, sticky="w", padx=(12, 0))
 
-        health_frame = ttk.Frame(self.root)
-        health_frame.pack(fill="x", **padding)
-        ttk.Label(health_frame, textvariable=self.cookie_status_var).pack(side="left", padx=(0, 14))
-        ttk.Label(health_frame, textvariable=self.error_status_var).pack(side="left")
-        ttk.Label(health_frame, textvariable=self.stale_status_var).pack(side="left", padx=(14, 0))
+        self.notebook = self._create_notebook()
+        overview_tab = self._create_scrollable_tab("Overview")
+        reports_tab = self._create_scrollable_tab("Reports")
+        daily_tab = self._create_scrollable_tab("Daily Compare")
+        db_tools_tab = self._create_scrollable_tab("DB Tools")
+        output_tab = ttk.Frame(self.notebook)
+        self.notebook.add(output_tab, text="Output")
 
-        controls = ttk.Frame(self.root)
-        controls.pack(fill="x", **padding)
+        self._build_overview_tab(overview_tab)
+        self._build_reports_tab(reports_tab)
+        self._build_daily_tab(daily_tab)
+        self._build_db_tools_tab(db_tools_tab)
+        self._build_output_tab(output_tab)
+
+        message_frame = ttk.Frame(self.root)
+        message_frame.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
+        message_frame.columnconfigure(0, weight=1)
+        ttk.Label(message_frame, textvariable=self.message_var, foreground="#444").grid(row=0, column=0, sticky="w")
+
+
+
+    def _build_overview_tab(self, parent):
+        parent.columnconfigure(0, weight=1)
+
+        controls = ttk.LabelFrame(parent, text="Tracker controls")
+        controls.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
         self.start_btn = ttk.Button(controls, text="Start tracker", command=self._start_tracker_clicked)
         self.stop_btn = ttk.Button(controls, text="Stop tracker", command=self._stop_tracker_clicked)
         self.login_btn = ttk.Button(controls, text="Login-only", command=self._login_only_clicked)
         log_btn = ttk.Button(controls, text="Open log", command=_open_log)
         folder_btn = ttk.Button(controls, text="Open folder", command=_open_folder)
         reports_btn = ttk.Button(controls, text="Open reports", command=_open_reports_folder)
-
-        self.start_btn.pack(side="left", padx=4)
-        self.stop_btn.pack(side="left", padx=4)
-        self.login_btn.pack(side="left", padx=4)
-        log_btn.pack(side="left", padx=4)
-        folder_btn.pack(side="left", padx=4)
-        reports_btn.pack(side="left", padx=4)
+        self._build_form_row(
+            controls,
+            0,
+            [self.start_btn, self.stop_btn, self.login_btn, log_btn, folder_btn, reports_btn],
+            max_cols=4,
+        )
         ttk.Checkbutton(
             controls,
             text="Monitor-only session",
             variable=self.session_monitor_only,
             command=self._apply_control_mode,
-        ).pack(side="left", padx=10)
+        ).grid(row=2, column=0, columnspan=4, sticky="w", padx=4, pady=(2, 6))
         self._apply_control_mode()
 
-        wizard_frame = ttk.LabelFrame(self.root, text="First-run wizard")
-        wizard_frame.pack(fill="x", **padding)
+        wizard_frame = ttk.LabelFrame(parent, text="First-run wizard")
+        wizard_frame.grid(row=1, column=0, sticky="ew", padx=4, pady=4)
+        wizard_frame.columnconfigure(0, weight=1)
         wizard_controls = ttk.Frame(wizard_frame)
-        wizard_controls.pack(fill="x", padx=4, pady=4)
-        ttk.Button(wizard_controls, text="Run setup checks", command=self._run_wizard_checks).pack(side="left", padx=4)
-        ttk.Button(wizard_controls, text="Open .env", command=self._open_env_file).pack(side="left", padx=4)
-        ttk.Button(wizard_controls, text="Run login-only now", command=self._login_only_clicked).pack(side="left", padx=4)
-        ttk.Label(wizard_frame, textvariable=self.wizard_summary_var).pack(anchor="w", padx=8, pady=(0, 4))
+        wizard_controls.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 2))
+        self._build_form_row(
+            wizard_controls,
+            0,
+            [
+                ttk.Button(wizard_controls, text="Run setup checks", command=self._run_wizard_checks),
+                ttk.Button(wizard_controls, text="Open .env", command=self._open_env_file),
+                ttk.Button(wizard_controls, text="Run login-only now", command=self._login_only_clicked),
+            ],
+            max_cols=3,
+        )
+        ttk.Label(wizard_frame, textvariable=self.wizard_summary_var).grid(row=1, column=0, sticky="w", padx=8, pady=(0, 4))
 
+        wizard_table = ttk.Frame(wizard_frame)
+        wizard_table.grid(row=2, column=0, sticky="nsew", padx=6, pady=(0, 6))
+        wizard_table.columnconfigure(0, weight=1)
+        wizard_table.rowconfigure(0, weight=1)
         self.wizard_tree = ttk.Treeview(
-            wizard_frame,
+            wizard_table,
             columns=("check", "status", "details"),
             show="headings",
-            height=5,
+            height=6,
         )
         self.wizard_tree.heading("check", text="Check")
         self.wizard_tree.heading("status", text="Status")
         self.wizard_tree.heading("details", text="Details")
         self.wizard_tree.column("check", width=170, anchor="w")
-        self.wizard_tree.column("status", width=80, anchor="center")
-        self.wizard_tree.column("details", width=660, anchor="w")
-        self.wizard_tree.pack(fill="x", padx=6, pady=(0, 6))
+        self.wizard_tree.column("status", width=90, anchor="center")
+        self.wizard_tree.column("details", width=520, anchor="w", stretch=True)
+        wizard_scroll = ttk.Scrollbar(wizard_table, orient="vertical", command=self.wizard_tree.yview)
+        self.wizard_tree.configure(yscrollcommand=wizard_scroll.set)
+        self.wizard_tree.grid(row=0, column=0, sticky="nsew")
+        wizard_scroll.grid(row=0, column=1, sticky="ns")
 
-        quick_frame = ttk.LabelFrame(self.root, text="Quick reports")
-        quick_frame.pack(fill="x", **padding)
+    def _build_reports_tab(self, parent):
+        parent.columnconfigure(0, weight=1)
 
-        ttk.Label(quick_frame, text="Days:").pack(side="left", padx=4)
-        ttk.Entry(quick_frame, textvariable=self.days_var, width=5).pack(side="left")
+        quick_frame = ttk.LabelFrame(parent, text="Quick reports")
+        quick_frame.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
+        self._build_form_row(
+            quick_frame,
+            0,
+            [
+                ttk.Label(quick_frame, text="Days:"),
+                ttk.Entry(quick_frame, textvariable=self.days_var, width=6),
+                ttk.Button(quick_frame, text="Summary", command=self._summary_report),
+                ttk.Button(quick_frame, text="New", command=self._new_report),
+                ttk.Button(quick_frame, text="Lost", command=self._lost_report),
+                ttk.Button(quick_frame, text="Daily counts", command=self._daily_report),
+                ttk.Button(quick_frame, text="Snapshot now", command=self._snapshot_now),
+            ],
+            max_cols=5,
+        )
 
-        ttk.Button(quick_frame, text="Summary", command=self._summary_report).pack(side="left", padx=4)
-        ttk.Button(quick_frame, text="New", command=self._new_report).pack(side="left", padx=4)
-        ttk.Button(quick_frame, text="Lost", command=self._lost_report).pack(side="left", padx=4)
-        ttk.Button(quick_frame, text="Daily counts", command=self._daily_report).pack(side="left", padx=4)
-        ttk.Button(quick_frame, text="Snapshot now", command=self._snapshot_now).pack(side="left", padx=4)
-
-        list_frame = ttk.LabelFrame(self.root, text="Current list export")
-        list_frame.pack(fill="x", **padding)
-        ttk.Label(list_frame, text="Type:").pack(side="left", padx=4)
-        ttk.Combobox(list_frame, textvariable=self.list_type_var, values=["both", "followers", "followings"], width=12).pack(side="left")
-        ttk.Label(list_frame, text="Target (optional):").pack(side="left", padx=4)
+        list_frame = ttk.LabelFrame(parent, text="Current list export")
+        list_frame.grid(row=1, column=0, sticky="ew", padx=4, pady=4)
+        ttk.Label(list_frame, text="Type:").grid(row=0, column=0, sticky="w", padx=4, pady=4)
+        ttk.Combobox(
+            list_frame,
+            textvariable=self.list_type_var,
+            values=["both", "followers", "followings"],
+            width=12,
+            state="readonly",
+        ).grid(row=0, column=1, sticky="w", padx=4, pady=4)
+        ttk.Label(list_frame, text="Target (optional):").grid(row=0, column=2, sticky="w", padx=4, pady=4)
         self.list_target_cb = ttk.Combobox(
             list_frame,
             textvariable=self.list_target_var,
             values=self.available_targets,
-            width=18,
+            width=22,
             state="readonly",
         )
-        self.list_target_cb.pack(side="left")
-        ttk.Button(list_frame, text="Export CSV", command=self._list_csv).pack(side="left", padx=4)
-        ttk.Button(list_frame, text="Export JSON", command=self._list_json).pack(side="left", padx=4)
+        self.list_target_cb.grid(row=0, column=3, sticky="w", padx=4, pady=4)
+        ttk.Button(list_frame, text="Export CSV", command=self._list_csv).grid(row=1, column=0, sticky="w", padx=4, pady=(0, 4))
+        ttk.Button(list_frame, text="Export JSON", command=self._list_json).grid(row=1, column=1, sticky="w", padx=4, pady=(0, 4))
 
-        db_tools_frame = ttk.LabelFrame(self.root, text="DB tools")
-        db_tools_frame.pack(fill="x", **padding)
-        ttk.Button(db_tools_frame, text="Preview merge from DB...", command=self._db_preview_merge).pack(side="left", padx=4, pady=4)
-        ttk.Button(db_tools_frame, text="Merge from DB...", command=self._db_apply_merge).pack(side="left", padx=4, pady=4)
-        ttk.Button(db_tools_frame, text="Preview cleanup targets", command=self._db_cleanup_preview).pack(side="left", padx=4, pady=4)
-        ttk.Button(db_tools_frame, text="Apply cleanup targets", command=self._db_cleanup_apply).pack(side="left", padx=4, pady=4)
-        ttk.Button(db_tools_frame, text="DB integrity check", command=self._db_integrity_check).pack(side="left", padx=4, pady=4)
-        ttk.Button(db_tools_frame, text="DB vacuum", command=self._db_vacuum).pack(side="left", padx=4, pady=4)
-
-        range_frame = ttk.LabelFrame(self.root, text="New/Lost in range (local time)")
-        range_frame.pack(fill="x", **padding)
-        ttk.Label(range_frame, text="From (date):").pack(side="left", padx=4)
+        range_frame = ttk.LabelFrame(parent, text="New/Lost in range (local time)")
+        range_frame.grid(row=2, column=0, sticky="ew", padx=4, pady=4)
+        ttk.Label(range_frame, text="From (date):").grid(row=0, column=0, sticky="w", padx=4, pady=4)
         self.range_from_cb = ttk.Combobox(
             range_frame,
             textvariable=self.range_from_var,
             values=self.available_dates,
-            width=12,
+            width=14,
             state="readonly",
         )
-        self.range_from_cb.pack(side="left")
-        ttk.Button(range_frame, text="Pick", command=self._pick_from_date).pack(side="left", padx=4)
-        ttk.Label(range_frame, text="To (date):").pack(side="left", padx=4)
+        self.range_from_cb.grid(row=0, column=1, sticky="w", padx=4, pady=4)
+        ttk.Button(range_frame, text="Pick", command=self._pick_from_date).grid(row=0, column=2, sticky="w", padx=4, pady=4)
+        ttk.Label(range_frame, text="To (date):").grid(row=0, column=3, sticky="w", padx=4, pady=4)
         self.range_to_cb = ttk.Combobox(
             range_frame,
             textvariable=self.range_to_var,
             values=self.available_dates,
-            width=12,
+            width=14,
             state="readonly",
         )
-        self.range_to_cb.pack(side="left")
-        ttk.Button(range_frame, text="Pick", command=self._pick_to_date).pack(side="left", padx=4)
-        ttk.Label(range_frame, text="Type:").pack(side="left", padx=4)
-        ttk.Combobox(range_frame, textvariable=self.range_type_var, values=["both", "followers", "followings"], width=10).pack(side="left")
-        ttk.Label(range_frame, text="Target:").pack(side="left", padx=4)
+        self.range_to_cb.grid(row=0, column=4, sticky="w", padx=4, pady=4)
+        ttk.Button(range_frame, text="Pick", command=self._pick_to_date).grid(row=0, column=5, sticky="w", padx=4, pady=4)
+        ttk.Label(range_frame, text="Type:").grid(row=1, column=0, sticky="w", padx=4, pady=4)
+        ttk.Combobox(
+            range_frame,
+            textvariable=self.range_type_var,
+            values=["both", "followers", "followings"],
+            width=12,
+            state="readonly",
+        ).grid(row=1, column=1, sticky="w", padx=4, pady=4)
+        ttk.Label(range_frame, text="Target:").grid(row=1, column=2, sticky="w", padx=4, pady=4)
         self.range_target_cb = ttk.Combobox(
             range_frame,
             textvariable=self.range_target_var,
             values=self.available_targets,
-            width=14,
+            width=22,
             state="readonly",
         )
-        self.range_target_cb.pack(side="left")
-        ttk.Button(range_frame, text="New", command=self._new_in_range).pack(side="left", padx=4)
-        ttk.Button(range_frame, text="Lost", command=self._lost_in_range).pack(side="left", padx=4)
+        self.range_target_cb.grid(row=1, column=3, sticky="w", padx=4, pady=4)
+        ttk.Button(range_frame, text="New", command=self._new_in_range).grid(row=2, column=0, sticky="w", padx=4, pady=(0, 4))
+        ttk.Button(range_frame, text="Lost", command=self._lost_in_range).grid(row=2, column=1, sticky="w", padx=4, pady=(0, 4))
 
-        day_frame = ttk.LabelFrame(self.root, text="Day details (local day)")
-        day_frame.pack(fill="x", **padding)
-        ttk.Label(day_frame, text="Date:").pack(side="left", padx=4)
+        day_frame = ttk.LabelFrame(parent, text="Day details (local day)")
+        day_frame.grid(row=3, column=0, sticky="ew", padx=4, pady=4)
+        ttk.Label(day_frame, text="Date:").grid(row=0, column=0, sticky="w", padx=4, pady=4)
         self.day_cb = ttk.Combobox(
             day_frame,
             textvariable=self.day_var,
             values=self.available_dates,
-            width=12,
+            width=14,
             state="readonly",
         )
-        self.day_cb.pack(side="left")
-        ttk.Button(day_frame, text="Pick", command=self._pick_day_date).pack(side="left", padx=4)
-        ttk.Label(day_frame, text="Type:").pack(side="left", padx=4)
-        ttk.Combobox(day_frame, textvariable=self.day_type_var, values=["both", "followers", "followings"], width=10).pack(side="left")
-        ttk.Label(day_frame, text="Target:").pack(side="left", padx=4)
+        self.day_cb.grid(row=0, column=1, sticky="w", padx=4, pady=4)
+        ttk.Button(day_frame, text="Pick", command=self._pick_day_date).grid(row=0, column=2, sticky="w", padx=4, pady=4)
+        ttk.Label(day_frame, text="Type:").grid(row=0, column=3, sticky="w", padx=4, pady=4)
+        ttk.Combobox(
+            day_frame,
+            textvariable=self.day_type_var,
+            values=["both", "followers", "followings"],
+            width=12,
+            state="readonly",
+        ).grid(row=0, column=4, sticky="w", padx=4, pady=4)
+        ttk.Label(day_frame, text="Target:").grid(row=1, column=0, sticky="w", padx=4, pady=(0, 4))
         self.day_target_cb = ttk.Combobox(
             day_frame,
             textvariable=self.day_target_var,
             values=self.available_targets,
-            width=14,
+            width=22,
             state="readonly",
         )
-        self.day_target_cb.pack(side="left")
-        ttk.Button(day_frame, text="Run day details", command=self._day_details).pack(side="left", padx=4)
+        self.day_target_cb.grid(row=1, column=1, columnspan=2, sticky="w", padx=4, pady=(0, 4))
+        ttk.Button(day_frame, text="Run day details", command=self._day_details).grid(row=1, column=3, sticky="w", padx=4, pady=(0, 4))
 
-        daily_frame = ttk.LabelFrame(self.root, text="Daily compare (DB live)")
-        daily_frame.pack(fill="both", expand=False, **padding)
+        snap_frame = ttk.LabelFrame(parent, text="Snapshot at time (local)")
+        snap_frame.grid(row=4, column=0, sticky="ew", padx=4, pady=4)
+        ttk.Label(snap_frame, text="At (date or ISO):").grid(row=0, column=0, sticky="w", padx=4, pady=4)
+        self.snapshot_cb = ttk.Combobox(
+            snap_frame,
+            textvariable=self.snapshot_var,
+            values=self.available_run_times,
+            width=22,
+            state="readonly",
+        )
+        self.snapshot_cb.grid(row=0, column=1, sticky="w", padx=4, pady=4)
+        ttk.Button(snap_frame, text="Pick", command=self._pick_snapshot_date).grid(row=0, column=2, sticky="w", padx=4, pady=4)
+        ttk.Label(snap_frame, text="Type:").grid(row=0, column=3, sticky="w", padx=4, pady=4)
+        ttk.Combobox(
+            snap_frame,
+            textvariable=self.snapshot_type_var,
+            values=["both", "followers", "followings"],
+            width=12,
+            state="readonly",
+        ).grid(row=0, column=4, sticky="w", padx=4, pady=4)
+        ttk.Label(snap_frame, text="Target:").grid(row=1, column=0, sticky="w", padx=4, pady=(0, 4))
+        self.snapshot_target_cb = ttk.Combobox(
+            snap_frame,
+            textvariable=self.snapshot_target_var,
+            values=self.available_targets,
+            width=22,
+            state="readonly",
+        )
+        self.snapshot_target_cb.grid(row=1, column=1, columnspan=2, sticky="w", padx=4, pady=(0, 4))
+        ttk.Button(snap_frame, text="Snapshot", command=self._snapshot_custom).grid(row=1, column=3, sticky="w", padx=4, pady=(0, 4))
+
+        refresh_frame = ttk.Frame(parent)
+        refresh_frame.grid(row=5, column=0, sticky="ew", padx=4, pady=(2, 4))
+        ttk.Button(refresh_frame, text="Refresh options from DB", command=self._refresh_dates_clicked).grid(
+            row=0, column=0, sticky="w"
+        )
+
+    def _build_daily_tab(self, parent):
+        parent.columnconfigure(0, weight=1)
+
+        daily_frame = ttk.LabelFrame(parent, text="Daily compare (DB live)")
+        daily_frame.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+        daily_frame.columnconfigure(0, weight=1)
 
         daily_controls = ttk.Frame(daily_frame)
-        daily_controls.pack(fill="x", padx=6, pady=(6, 4))
-        ttk.Label(daily_controls, text="Target:").pack(side="left", padx=4)
+        daily_controls.grid(row=0, column=0, sticky="ew", padx=6, pady=(6, 4))
+        ttk.Label(daily_controls, text="Target:").grid(row=0, column=0, sticky="w", padx=4, pady=4)
         self.daily_target_cb = ttk.Combobox(
             daily_controls,
             textvariable=self.daily_target_var,
             values=self.available_targets,
-            width=18,
+            width=22,
             state="readonly",
         )
-        self.daily_target_cb.pack(side="left")
-        ttk.Label(daily_controls, text="Type:").pack(side="left", padx=6)
+        self.daily_target_cb.grid(row=0, column=1, sticky="w", padx=4, pady=4)
+        ttk.Label(daily_controls, text="Type:").grid(row=0, column=2, sticky="w", padx=4, pady=4)
         ttk.Combobox(
             daily_controls,
             textvariable=self.daily_type_var,
             values=["both", "followers", "followings"],
             width=12,
             state="readonly",
-        ).pack(side="left")
-        ttk.Button(daily_controls, text="Load daily table", command=self._load_daily_compare).pack(side="left", padx=8)
-        ttk.Button(daily_controls, text="Load selected day details", command=self._load_selected_day_details).pack(side="left", padx=4)
-        ttk.Button(daily_controls, text="Export selected day CSV", command=self._export_selected_day_csv).pack(side="left", padx=4)
+        ).grid(row=0, column=3, sticky="w", padx=4, pady=4)
+        ttk.Button(daily_controls, text="Load daily table", command=self._load_daily_compare).grid(
+            row=0, column=4, sticky="w", padx=6, pady=4
+        )
+        ttk.Button(daily_controls, text="Load selected day details", command=self._load_selected_day_details).grid(
+            row=1, column=0, columnspan=2, sticky="w", padx=4, pady=(0, 4)
+        )
+        ttk.Button(daily_controls, text="Export selected day CSV", command=self._export_selected_day_csv).grid(
+            row=1, column=2, columnspan=2, sticky="w", padx=4, pady=(0, 4)
+        )
 
         daily_table_frame = ttk.Frame(daily_frame)
-        daily_table_frame.pack(fill="both", padx=6, pady=(0, 4))
+        daily_table_frame.grid(row=1, column=0, sticky="nsew", padx=6, pady=(0, 4))
+        daily_table_frame.columnconfigure(0, weight=1)
+        daily_table_frame.rowconfigure(0, weight=1)
         self.daily_tree = ttk.Treeview(
             daily_table_frame,
             columns=("day", "new_followers", "lost_followers", "new_followings", "lost_followings"),
             show="headings",
-            height=6,
+            height=7,
         )
         for col, label, width in [
-            ("day", "Day", 100),
-            ("new_followers", "New followers", 110),
-            ("lost_followers", "Lost followers", 110),
-            ("new_followings", "New followings", 120),
-            ("lost_followings", "Lost followings", 120),
+            ("day", "Day", 110),
+            ("new_followers", "New followers", 120),
+            ("lost_followers", "Lost followers", 120),
+            ("new_followings", "New followings", 130),
+            ("lost_followings", "Lost followings", 130),
         ]:
             self.daily_tree.heading(col, text=label)
-            self.daily_tree.column(col, width=width, anchor="center")
-        self.daily_tree.pack(fill="x")
+            self.daily_tree.column(col, width=width, anchor="center", stretch=True)
+        daily_y_scroll = ttk.Scrollbar(daily_table_frame, orient="vertical", command=self.daily_tree.yview)
+        daily_x_scroll = ttk.Scrollbar(daily_table_frame, orient="horizontal", command=self.daily_tree.xview)
+        self.daily_tree.configure(yscrollcommand=daily_y_scroll.set, xscrollcommand=daily_x_scroll.set)
+        self.daily_tree.grid(row=0, column=0, sticky="nsew")
+        daily_y_scroll.grid(row=0, column=1, sticky="ns")
+        daily_x_scroll.grid(row=1, column=0, sticky="ew")
         self.daily_tree.bind("<<TreeviewSelect>>", lambda _e: self._on_daily_select())
 
         daily_detail_frame = ttk.Frame(daily_frame)
-        daily_detail_frame.pack(fill="both", padx=6, pady=(0, 6))
+        daily_detail_frame.grid(row=2, column=0, sticky="nsew", padx=6, pady=(0, 6))
+        daily_detail_frame.columnconfigure(0, weight=1)
+        daily_detail_frame.columnconfigure(1, weight=1)
 
         new_box = ttk.LabelFrame(daily_detail_frame, text="New on selected day")
-        new_box.pack(side="left", fill="both", expand=True, padx=(0, 4))
-        self.daily_new_tree = ttk.Treeview(new_box, columns=("type", "username", "at"), show="headings", height=6)
+        new_box.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        new_box.columnconfigure(0, weight=1)
+        new_box.rowconfigure(0, weight=1)
+        self.daily_new_tree = ttk.Treeview(new_box, columns=("type", "username", "at"), show="headings", height=8)
         self.daily_new_tree.heading("type", text="Type")
         self.daily_new_tree.heading("username", text="Username")
         self.daily_new_tree.heading("at", text="Seen at (local)")
-        self.daily_new_tree.column("type", width=75, anchor="center")
-        self.daily_new_tree.column("username", width=160, anchor="w")
-        self.daily_new_tree.column("at", width=145, anchor="center")
-        self.daily_new_tree.pack(fill="both", expand=True)
+        self.daily_new_tree.column("type", width=85, anchor="center")
+        self.daily_new_tree.column("username", width=210, anchor="w", stretch=True)
+        self.daily_new_tree.column("at", width=165, anchor="center")
+        daily_new_scroll = ttk.Scrollbar(new_box, orient="vertical", command=self.daily_new_tree.yview)
+        self.daily_new_tree.configure(yscrollcommand=daily_new_scroll.set)
+        self.daily_new_tree.grid(row=0, column=0, sticky="nsew")
+        daily_new_scroll.grid(row=0, column=1, sticky="ns")
 
         lost_box = ttk.LabelFrame(daily_detail_frame, text="Lost on selected day")
-        lost_box.pack(side="left", fill="both", expand=True, padx=(4, 0))
-        self.daily_lost_tree = ttk.Treeview(lost_box, columns=("type", "username", "at"), show="headings", height=6)
+        lost_box.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+        lost_box.columnconfigure(0, weight=1)
+        lost_box.rowconfigure(0, weight=1)
+        self.daily_lost_tree = ttk.Treeview(lost_box, columns=("type", "username", "at"), show="headings", height=8)
         self.daily_lost_tree.heading("type", text="Type")
         self.daily_lost_tree.heading("username", text="Username")
         self.daily_lost_tree.heading("at", text="Lost at (local)")
-        self.daily_lost_tree.column("type", width=75, anchor="center")
-        self.daily_lost_tree.column("username", width=160, anchor="w")
-        self.daily_lost_tree.column("at", width=145, anchor="center")
-        self.daily_lost_tree.pack(fill="both", expand=True)
+        self.daily_lost_tree.column("type", width=85, anchor="center")
+        self.daily_lost_tree.column("username", width=210, anchor="w", stretch=True)
+        self.daily_lost_tree.column("at", width=165, anchor="center")
+        daily_lost_scroll = ttk.Scrollbar(lost_box, orient="vertical", command=self.daily_lost_tree.yview)
+        self.daily_lost_tree.configure(yscrollcommand=daily_lost_scroll.set)
+        self.daily_lost_tree.grid(row=0, column=0, sticky="nsew")
+        daily_lost_scroll.grid(row=0, column=1, sticky="ns")
 
-        snap_frame = ttk.LabelFrame(self.root, text="Snapshot at time (local)")
-        snap_frame.pack(fill="x", **padding)
-        ttk.Label(snap_frame, text="At (date or ISO):").pack(side="left", padx=4)
-        self.snapshot_cb = ttk.Combobox(
-            snap_frame,
-            textvariable=self.snapshot_var,
-            values=self.available_run_times,
-            width=20,
-            state="readonly",
-        )
-        self.snapshot_cb.pack(side="left")
-        ttk.Button(snap_frame, text="Pick", command=self._pick_snapshot_date).pack(side="left", padx=4)
-        ttk.Label(snap_frame, text="Type:").pack(side="left", padx=4)
-        ttk.Combobox(snap_frame, textvariable=self.snapshot_type_var, values=["both", "followers", "followings"], width=10).pack(side="left")
-        ttk.Label(snap_frame, text="Target:").pack(side="left", padx=4)
-        self.snapshot_target_cb = ttk.Combobox(
-            snap_frame,
-            textvariable=self.snapshot_target_var,
-            values=self.available_targets,
-            width=14,
-            state="readonly",
-        )
-        self.snapshot_target_cb.pack(side="left")
-        ttk.Button(snap_frame, text="Snapshot", command=self._snapshot_custom).pack(side="left", padx=4)
+    def _build_db_tools_tab(self, parent):
+        parent.columnconfigure(0, weight=1)
+        db_tools_frame = ttk.LabelFrame(parent, text="Database maintenance")
+        db_tools_frame.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
+        db_tools_frame.columnconfigure(0, weight=1)
+        db_tools_frame.columnconfigure(1, weight=1)
+        buttons = [
+            ("Preview merge from DB...", self._db_preview_merge),
+            ("Merge from DB...", self._db_apply_merge),
+            ("Preview cleanup targets", self._db_cleanup_preview),
+            ("Apply cleanup targets", self._db_cleanup_apply),
+            ("DB integrity check", self._db_integrity_check),
+            ("DB vacuum", self._db_vacuum),
+        ]
+        for idx, (label, command) in enumerate(buttons):
+            row = idx // 2
+            col = idx % 2
+            ttk.Button(db_tools_frame, text=label, command=command).grid(
+                row=row, column=col, sticky="ew", padx=4, pady=4
+            )
 
-        message_frame = ttk.Frame(self.root)
-        message_frame.pack(fill="x", **padding)
-        ttk.Label(message_frame, textvariable=self.message_var, foreground="#444").pack(side="left")
+    def _build_output_tab(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=1)
+        output_controls = ttk.Frame(parent)
+        output_controls.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
+        ttk.Button(output_controls, text="Save output", command=self._save_output).grid(row=0, column=0, sticky="w")
+        ttk.Button(output_controls, text="Clear output", command=self._clear_output).grid(row=0, column=1, sticky="w", padx=6)
 
-        refresh_frame = ttk.Frame(self.root)
-        refresh_frame.pack(fill="x", **padding)
-        ttk.Button(refresh_frame, text="Refresh options from DB", command=self._refresh_dates_clicked).pack(side="left")
-
-        output_frame = ttk.LabelFrame(self.root, text="Report output")
-        output_frame.pack(fill="both", expand=True, **padding)
-        self.output_text = tk.Text(output_frame, height=16, wrap="none")
+        output_frame = ttk.LabelFrame(parent, text="Report output")
+        output_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
+        output_frame.columnconfigure(0, weight=1)
+        output_frame.rowconfigure(0, weight=1)
+        self.output_text = tk.Text(output_frame, height=20, wrap="none")
         y_scroll = ttk.Scrollbar(output_frame, orient="vertical", command=self.output_text.yview)
         x_scroll = ttk.Scrollbar(output_frame, orient="horizontal", command=self.output_text.xview)
         self.output_text.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
         self.output_text.grid(row=0, column=0, sticky="nsew")
         y_scroll.grid(row=0, column=1, sticky="ns")
         x_scroll.grid(row=1, column=0, sticky="ew")
-        output_frame.columnconfigure(0, weight=1)
-        output_frame.rowconfigure(0, weight=1)
-
-        output_controls = ttk.Frame(self.root)
-        output_controls.pack(fill="x", **padding)
-        ttk.Button(output_controls, text="Save output", command=self._save_output).pack(side="left")
-        ttk.Button(output_controls, text="Clear output", command=self._clear_output).pack(side="left", padx=6)
 
     def _set_message(self, text):
         self.message_var.set(text)

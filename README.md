@@ -192,6 +192,10 @@ The GUI is designed for non-technical users:
   - cookie age
   - latest error from log
   - time since last successful run
+- Responsive layout for smaller screens (optimized for 1366x768):
+  - tabbed sections: `Overview`, `Reports`, `Daily Compare`, `DB Tools`, `Output`
+  - vertical scrolling inside tabs to avoid clipped controls
+  - compact multi-row forms (no horizontal form scrolling)
 - In-app reports rendered directly (with optional "Save output").
 - Daily compare view from DB (no file export required):
   - per-day new/lost counts (followers + followings)

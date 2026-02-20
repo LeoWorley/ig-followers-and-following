@@ -19,6 +19,7 @@ reports/
 
 # logs
 tracker.log
+tracker.log.*
 tracker.lock
 *.log
 
