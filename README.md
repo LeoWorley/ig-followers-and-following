@@ -15,6 +15,10 @@ Track changes in followers and following over time, store history in SQLite, and
 - `docs/QUICK_START.md` - fastest setup path.
 - `docs/TROUBLESHOOTING.md` - common issues and fixes.
 - `docs/ADVANCED.md` - runtime tuning, db tools, packaging.
+- `docs/MOBILE_DASHBOARD.md` - mobile web dashboard via Tailscale.
+- `docs/OPERATIONS.md` - local operations runbook.
+- `docs/ARCHITECTURE.md` - system architecture and boundaries.
+- `docs/CLOUD_MIGRATION.md` - migration path from local to cloud.
 
 ## Quick Start (recommended)
 
@@ -228,6 +232,30 @@ Small monitor/controller with report shortcuts.
 - Optional Windows startup shortcut:
   - install: `.\register_tray_startup.ps1`
   - remove: `.\register_tray_startup.ps1 -Remove`
+
+## Mobile Web Dashboard (`web_app.py`)
+
+Private, read-only dashboard for phone access to tracker data.
+
+- Security model:
+  - Access from Tailnet only (recommended).
+  - HTTP Basic Auth in app (`WEB_AUTH_USER` / `WEB_AUTH_PASS`).
+- Default bind:
+  - `WEB_HOST=0.0.0.0`
+  - `WEB_PORT=8088`
+- Start scripts:
+  - Windows: `.\start_web.ps1`
+  - macOS/Linux: `./start_web.sh`
+- Open from phone:
+  - `http://<tailscale-ip>:8088`
+
+API endpoints:
+- `GET /api/v1/health`
+- `GET /api/v1/targets`
+- `GET /api/v1/overview`
+- `GET /api/v1/daily`
+- `GET /api/v1/day`
+- `GET /api/v1/current`
 
 ## Packaging (standalone binaries)
 
