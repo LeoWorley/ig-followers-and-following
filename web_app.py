@@ -1,7 +1,7 @@
 import os
 import secrets
 import sqlite3
-from datetime import date, datetime, time as dt_time, timezone
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -26,6 +26,7 @@ if not LOCK_FILE.is_absolute():
 
 security = HTTPBasic()
 app = FastAPI(title="IG Tracker Web", version="0.2.0")
+VALID_TYPES = {"followers", "followings", "both"}
 
 
 def _resolve_tz(tz_name: Optional[str]) -> ZoneInfo:
@@ -34,6 +35,13 @@ def _resolve_tz(tz_name: Optional[str]) -> ZoneInfo:
         return ZoneInfo(value)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid timezone: {value}") from exc
+
+
+def _normalize_type(list_type: str) -> str:
+    value = (list_type or "both").strip().lower()
+    if value not in VALID_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid type: {list_type}")
+    return value
 
 
 def _auth(credentials: HTTPBasicCredentials = Depends(security)):
@@ -77,12 +85,26 @@ def _to_tz_iso(value, tz: ZoneInfo) -> Optional[str]:
     return dt_value.astimezone(tz).isoformat(timespec="seconds")
 
 
+def _to_tz_day(value, tz: ZoneInfo) -> Optional[str]:
+    dt_value = _parse_db_dt(value)
+    if dt_value is None:
+        return None
+    return dt_value.astimezone(tz).date().isoformat()
+
+
 def _day_bounds_utc_naive(day_value: date, tz: ZoneInfo):
     start_local = datetime.combine(day_value, dt_time.min, tzinfo=tz)
     end_local = datetime.combine(day_value, dt_time.max, tzinfo=tz)
     start_utc = start_local.astimezone(timezone.utc).replace(tzinfo=None)
     end_utc = end_local.astimezone(timezone.utc).replace(tzinfo=None)
     return start_utc, end_utc
+
+
+def _ensure_iso_date(day_str: str) -> date:
+    try:
+        return datetime.fromisoformat(day_str).date()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid date: {day_str} (expected YYYY-MM-DD)") from exc
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -229,6 +251,244 @@ def api_overview(
         "lost_today_followers": int(lost_today["lost_today_followers"] or 0),
         "new_today_followings": int(new_today["new_today_followings"] or 0),
         "lost_today_followings": int(lost_today["lost_today_followings"] or 0),
+        "tz_used": str(tzinfo),
+    }
+
+
+@app.get("/api/v1/daily")
+def api_daily(
+    days: int = Query(default=30, ge=1, le=365),
+    target: str = Query(default=""),
+    type: str = Query(default="both"),
+    tz: Optional[str] = Query(default=None),
+    _enabled: None = Depends(_ensure_enabled),
+    _user: str = Depends(_auth),
+):
+    tzinfo = _resolve_tz(tz)
+    target = target.strip()
+    list_type = _normalize_type(type)
+
+    end_local_day = datetime.now(tzinfo).date()
+    start_local_day = end_local_day - timedelta(days=days - 1)
+    start_utc, _ = _day_bounds_utc_naive(start_local_day, tzinfo)
+    _, end_utc = _day_bounds_utc_naive(end_local_day, tzinfo)
+
+    with _open_db() as conn:
+        new_rows = conn.execute(
+            """
+            SELECT ff.first_seen_run_at, ff.is_follower
+            FROM followers_followings ff
+            JOIN targets t ON t.id = ff.target_id
+            WHERE ff.first_seen_run_at IS NOT NULL
+              AND ff.first_seen_run_at >= ?
+              AND ff.first_seen_run_at <= ?
+              AND (? = '' OR t.username = ?)
+              AND (
+                ? = 'both'
+                OR (? = 'followers' AND ff.is_follower = 1)
+                OR (? = 'followings' AND ff.is_follower = 0)
+              )
+            """,
+            (start_utc, end_utc, target, target, list_type, list_type, list_type),
+        ).fetchall()
+        lost_rows = conn.execute(
+            """
+            SELECT ff.lost_at_run_at, ff.is_follower
+            FROM followers_followings ff
+            JOIN targets t ON t.id = ff.target_id
+            WHERE ff.lost_at_run_at IS NOT NULL
+              AND ff.lost_at_run_at >= ?
+              AND ff.lost_at_run_at <= ?
+              AND (? = '' OR t.username = ?)
+              AND (
+                ? = 'both'
+                OR (? = 'followers' AND ff.is_follower = 1)
+                OR (? = 'followings' AND ff.is_follower = 0)
+              )
+            """,
+            (start_utc, end_utc, target, target, list_type, list_type, list_type),
+        ).fetchall()
+
+    buckets = {}
+    cursor_day = start_local_day
+    while cursor_day <= end_local_day:
+        buckets[cursor_day.isoformat()] = {
+            "new_followers": 0,
+            "lost_followers": 0,
+            "new_followings": 0,
+            "lost_followings": 0,
+        }
+        cursor_day = cursor_day + timedelta(days=1)
+
+    for row in new_rows:
+        day_key = _to_tz_day(row["first_seen_run_at"], tzinfo)
+        if day_key not in buckets:
+            continue
+        if int(row["is_follower"]) == 1:
+            buckets[day_key]["new_followers"] += 1
+        else:
+            buckets[day_key]["new_followings"] += 1
+
+    for row in lost_rows:
+        day_key = _to_tz_day(row["lost_at_run_at"], tzinfo)
+        if day_key not in buckets:
+            continue
+        if int(row["is_follower"]) == 1:
+            buckets[day_key]["lost_followers"] += 1
+        else:
+            buckets[day_key]["lost_followings"] += 1
+
+    rows = []
+    for day_key in sorted(buckets.keys(), reverse=True):
+        entry = buckets[day_key]
+        if list_type == "followers":
+            entry["new_followings"] = None
+            entry["lost_followings"] = None
+        elif list_type == "followings":
+            entry["new_followers"] = None
+            entry["lost_followers"] = None
+        rows.append({"day": day_key, **entry})
+
+    return {
+        "target": target or None,
+        "type": list_type,
+        "days": days,
+        "rows": rows,
+        "tz_used": str(tzinfo),
+    }
+
+
+@app.get("/api/v1/day")
+def api_day(
+    date: str = Query(...),
+    target: str = Query(default=""),
+    type: str = Query(default="both"),
+    tz: Optional[str] = Query(default=None),
+    _enabled: None = Depends(_ensure_enabled),
+    _user: str = Depends(_auth),
+):
+    tzinfo = _resolve_tz(tz)
+    target = target.strip()
+    list_type = _normalize_type(type)
+    day_value = _ensure_iso_date(date)
+    start_utc, end_utc = _day_bounds_utc_naive(day_value, tzinfo)
+
+    with _open_db() as conn:
+        new_rows = conn.execute(
+            """
+            SELECT ff.follower_following_username, ff.is_follower, ff.first_seen_run_at AS ts
+            FROM followers_followings ff
+            JOIN targets t ON t.id = ff.target_id
+            WHERE ff.first_seen_run_at IS NOT NULL
+              AND ff.first_seen_run_at >= ?
+              AND ff.first_seen_run_at <= ?
+              AND (? = '' OR t.username = ?)
+              AND (
+                ? = 'both'
+                OR (? = 'followers' AND ff.is_follower = 1)
+                OR (? = 'followings' AND ff.is_follower = 0)
+              )
+            ORDER BY ff.first_seen_run_at ASC, ff.follower_following_username ASC
+            """,
+            (start_utc, end_utc, target, target, list_type, list_type, list_type),
+        ).fetchall()
+        lost_rows = conn.execute(
+            """
+            SELECT ff.follower_following_username, ff.is_follower, ff.lost_at_run_at AS ts
+            FROM followers_followings ff
+            JOIN targets t ON t.id = ff.target_id
+            WHERE ff.lost_at_run_at IS NOT NULL
+              AND ff.lost_at_run_at >= ?
+              AND ff.lost_at_run_at <= ?
+              AND (? = '' OR t.username = ?)
+              AND (
+                ? = 'both'
+                OR (? = 'followers' AND ff.is_follower = 1)
+                OR (? = 'followings' AND ff.is_follower = 0)
+              )
+            ORDER BY ff.lost_at_run_at ASC, ff.follower_following_username ASC
+            """,
+            (start_utc, end_utc, target, target, list_type, list_type, list_type),
+        ).fetchall()
+
+    def _shape(rows):
+        payload = []
+        for row in rows:
+            payload.append(
+                {
+                    "username": row["follower_following_username"],
+                    "type": "follower" if int(row["is_follower"]) == 1 else "following",
+                    "timestamp_local": _to_tz_iso(row["ts"], tzinfo),
+                }
+            )
+        return payload
+
+    return {
+        "date": day_value.isoformat(),
+        "target": target or None,
+        "type": list_type,
+        "new": _shape(new_rows),
+        "lost": _shape(lost_rows),
+        "tz_used": str(tzinfo),
+    }
+
+
+@app.get("/api/v1/current")
+def api_current(
+    target: str = Query(default=""),
+    type: str = Query(default="both"),
+    limit: int = Query(default=5000, ge=1, le=20000),
+    tz: Optional[str] = Query(default=None),
+    _enabled: None = Depends(_ensure_enabled),
+    _user: str = Depends(_auth),
+):
+    tzinfo = _resolve_tz(tz)
+    target = target.strip()
+    list_type = _normalize_type(type)
+
+    list_sql = ""
+    if list_type == "followers":
+        list_sql = " AND ff.is_follower = 1"
+    elif list_type == "followings":
+        list_sql = " AND ff.is_follower = 0"
+
+    with _open_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+              t.username AS target_username,
+              ff.follower_following_username,
+              ff.is_follower,
+              ff.first_seen_run_at,
+              ff.last_seen_run_at
+            FROM followers_followings ff
+            JOIN targets t ON t.id = ff.target_id
+            WHERE ff.is_lost = 0
+              AND (? = '' OR t.username = ?)
+              {list_sql}
+            ORDER BY ff.follower_following_username ASC
+            LIMIT ?
+            """,
+            (target, target, limit),
+        ).fetchall()
+
+    payload = []
+    for row in rows:
+        payload.append(
+            {
+                "target": row["target_username"],
+                "username": row["follower_following_username"],
+                "type": "follower" if int(row["is_follower"]) == 1 else "following",
+                "first_seen_local": _to_tz_iso(row["first_seen_run_at"], tzinfo),
+                "last_seen_local": _to_tz_iso(row["last_seen_run_at"], tzinfo),
+            }
+        )
+
+    return {
+        "target": target or None,
+        "type": list_type,
+        "limit": limit,
+        "rows": payload,
         "tz_used": str(tzinfo),
     }
 
