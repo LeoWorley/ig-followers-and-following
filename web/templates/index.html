@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>IG Tracker Web</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body data-default-tz="{{ default_tz }}">
+    <div class="bg-orb bg-orb-a"></div>
+    <div class="bg-orb bg-orb-b"></div>
+
+    <main class="shell">
+      <header class="hero">
+        <p class="eyebrow">Private Mobile Dashboard</p>
+        <h1>IG Tracker</h1>
+        <p class="subtitle">Read-only analytics over your local tracker DB.</p>
+      </header>
+
+      <section class="panel filters">
+        <div class="field">
+          <label for="target">Target</label>
+          <select id="target"></select>
+        </div>
+        <div class="field">
+          <label for="listType">Type</label>
+          <select id="listType">
+            <option value="both">both</option>
+            <option value="followers">followers</option>
+            <option value="followings">followings</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="days">Days</label>
+          <input id="days" type="number" min="1" max="365" value="30">
+        </div>
+        <div class="field field-wide">
+          <label for="tz">Timezone</label>
+          <input id="tz" type="text" value="{{ default_tz }}">
+        </div>
+        <button id="refreshBtn" class="btn">Refresh</button>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <h2>Health</h2>
+          <dl id="health" class="kv-list"></dl>
+        </article>
+
+        <article class="panel">
+          <h2>Overview (Today)</h2>
+          <div class="metric-grid">
+            <div><span>Current Followers</span><strong id="mCurrentFollowers">0</strong></div>
+            <div><span>Current Followings</span><strong id="mCurrentFollowings">0</strong></div>
+            <div><span>New Followers</span><strong id="mNewFollowers">0</strong></div>
+            <div><span>Lost Followers</span><strong id="mLostFollowers">0</strong></div>
+            <div><span>New Followings</span><strong id="mNewFollowings">0</strong></div>
+            <div><span>Lost Followings</span><strong id="mLostFollowings">0</strong></div>
+          </div>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Daily Changes</h2>
+          <small id="dailyMeta"></small>
+        </div>
+        <div class="table-wrap">
+          <table id="dailyTable">
+            <thead>
+              <tr>
+                <th>Day</th>
+                <th>New F</th>
+                <th>Lost F</th>
+                <th>New FG</th>
+                <th>Lost FG</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Selected Day New</h2>
+            <small id="dayChosen">-</small>
+          </div>
+          <ul id="newList" class="event-list"></ul>
+        </article>
+        <article class="panel">
+          <h2>Selected Day Lost</h2>
+          <ul id="lostList" class="event-list"></ul>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Current Snapshot</h2>
+          <small id="currentMeta"></small>
+        </div>
+        <div class="table-wrap">
+          <table id="currentTable">
+            <thead>
+              <tr>
+                <th>Username</th>
+                <th>Type</th>
+                <th>First Seen</th>
+                <th>Last Seen</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" hidden></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

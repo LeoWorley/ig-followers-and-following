@@ -10,9 +10,12 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 
 ROOT_DIR = Path(__file__).resolve().parent
+WEB_DIR = ROOT_DIR / "web"
 load_dotenv(ROOT_DIR / ".env")
 
 WEB_ENABLED = os.getenv("WEB_ENABLED", "true").lower() == "true"
@@ -27,6 +30,10 @@ if not LOCK_FILE.is_absolute():
 security = HTTPBasic()
 app = FastAPI(title="IG Tracker Web", version="0.2.0")
 VALID_TYPES = {"followers", "followings", "both"}
+templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
+
+if (WEB_DIR / "static").exists():
+    app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
 
 
 def _resolve_tz(tz_name: Optional[str]) -> ZoneInfo:
@@ -108,17 +115,11 @@ def _ensure_iso_date(day_str: str) -> date:
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(_enabled: None = Depends(_ensure_enabled), _user: str = Depends(_auth)):
-    return """
-    <!doctype html>
-    <html lang="en">
-      <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-      <body>
-        <h1>IG Tracker Web</h1>
-        <p>API is active. UI will be enabled in the next iteration.</p>
-      </body>
-    </html>
-    """
+def index(request: Request, _enabled: None = Depends(_ensure_enabled), _user: str = Depends(_auth)):
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": request, "default_tz": WEB_TZ},
+    )
 
 
 @app.get("/api/v1/health")
