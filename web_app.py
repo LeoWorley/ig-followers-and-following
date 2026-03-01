@@ -1,7 +1,7 @@
 import os
 import secrets
 import sqlite3
-from datetime import date, datetime, time as dt_time, timedelta, timezone
+from datetime import date, datetime, time as dt_time, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+import pytz
 
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -36,12 +37,17 @@ if (WEB_DIR / "static").exists():
     app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
 
 
-def _resolve_tz(tz_name: Optional[str]) -> ZoneInfo:
+def _resolve_tz(tz_name: Optional[str]) -> tzinfo:
     value = (tz_name or WEB_TZ).strip()
+    if value.lower() in {"local", ""}:
+        return datetime.now().astimezone().tzinfo
     try:
         return ZoneInfo(value)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid timezone: {value}") from exc
+    except Exception:
+        try:
+            return pytz.timezone(value)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid timezone: {value}") from exc
 
 
 def _normalize_type(list_type: str) -> str:
@@ -85,21 +91,21 @@ def _parse_db_dt(value) -> Optional[datetime]:
     return dt_value.astimezone(timezone.utc)
 
 
-def _to_tz_iso(value, tz: ZoneInfo) -> Optional[str]:
+def _to_tz_iso(value, tz: tzinfo) -> Optional[str]:
     dt_value = _parse_db_dt(value)
     if dt_value is None:
         return None
     return dt_value.astimezone(tz).isoformat(timespec="seconds")
 
 
-def _to_tz_day(value, tz: ZoneInfo) -> Optional[str]:
+def _to_tz_day(value, tz: tzinfo) -> Optional[str]:
     dt_value = _parse_db_dt(value)
     if dt_value is None:
         return None
     return dt_value.astimezone(tz).date().isoformat()
 
 
-def _day_bounds_utc_naive(day_value: date, tz: ZoneInfo):
+def _day_bounds_utc_naive(day_value: date, tz: tzinfo):
     start_local = datetime.combine(day_value, dt_time.min, tzinfo=tz)
     end_local = datetime.combine(day_value, dt_time.max, tzinfo=tz)
     start_utc = start_local.astimezone(timezone.utc).replace(tzinfo=None)
