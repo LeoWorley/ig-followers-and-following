@@ -1,5 +1,7 @@
 # credentials and target user
 .env
+.env.*
+!.env.example
 
 # virtual environment
 venv/
@@ -22,6 +24,15 @@ tracker.log
 tracker.log.*
 tracker.lock
 *.log
+alerts_state.json
+logs/
+
+# sqlite artifacts
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
 
 # packaging
 build/
@@ -34,3 +45,8 @@ release/
 
 # windsurf rules
 .windsurfrules
+
+# tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
