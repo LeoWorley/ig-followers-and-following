@@ -63,3 +63,10 @@ jobs:
         run: |
           python report.py --help > /dev/null
           python db_tools.py --help > /dev/null
+          python - <<'PY'
+          import web_app
+
+          assert any(getattr(route, "path", "") == "/api/v1/health" for route in web_app.app.routes)
+          assert any(getattr(route, "path", "") == "/api/v1/daily" for route in web_app.app.routes)
+          print("Web app routes smoke check passed")
+          PY
