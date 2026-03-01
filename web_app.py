@@ -502,4 +502,8 @@ def api_current(
 
 @app.exception_handler(HTTPException)
 def http_exception_handler(_request: Request, exc: HTTPException):
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=exc.headers,
+    )
