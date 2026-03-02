@@ -6,8 +6,10 @@ import threading
 import subprocess
 import importlib.util
 import csv
+import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import tkinter as tk
 from tkinter import ttk, filedialog
@@ -181,6 +183,31 @@ def _open_folder():
 def _open_reports_folder():
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     _open_path(REPORTS_DIR)
+
+
+def _normalize_instagram_username(raw_value):
+    username = str(raw_value or "").strip()
+    while username.startswith("@"):
+        username = username[1:]
+    return username
+
+
+def _instagram_profile_url(username: str):
+    normalized = _normalize_instagram_username(username)
+    if not normalized:
+        return None
+    return f"https://www.instagram.com/{quote(normalized)}/"
+
+
+def _open_instagram_profile(username: str):
+    profile_url = _instagram_profile_url(username)
+    if not profile_url:
+        return False, "No valid Instagram username selected."
+    try:
+        webbrowser.open(profile_url)
+        return True, f"Opened profile: {username}"
+    except Exception as e:
+        return False, f"Failed to open profile '{username}': {e}"
 
 
 def _parse_dt(value):
@@ -853,6 +880,7 @@ class TrackerGUI:
         self.daily_new_tree.configure(yscrollcommand=daily_new_scroll.set)
         self.daily_new_tree.grid(row=0, column=0, sticky="nsew")
         daily_new_scroll.grid(row=0, column=1, sticky="ns")
+        self.daily_new_tree.bind("<Double-1>", self._open_selected_new_username)
 
         lost_box = ttk.LabelFrame(daily_detail_frame, text="Lost on selected day")
         lost_box.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
@@ -869,6 +897,7 @@ class TrackerGUI:
         self.daily_lost_tree.configure(yscrollcommand=daily_lost_scroll.set)
         self.daily_lost_tree.grid(row=0, column=0, sticky="nsew")
         daily_lost_scroll.grid(row=0, column=1, sticky="ns")
+        self.daily_lost_tree.bind("<Double-1>", self._open_selected_lost_username)
 
     def _build_db_tools_tab(self, parent):
         parent.columnconfigure(0, weight=1)
@@ -1532,6 +1561,35 @@ class TrackerGUI:
         if day:
             self.day_var.set(day)
             self._load_selected_day_details()
+
+    def _extract_username_from_tree(self, tree, event=None):
+        if event is not None:
+            row_id = tree.identify_row(event.y)
+            if row_id:
+                tree.selection_set(row_id)
+        selected = tree.selection()
+        if not selected:
+            return None
+        values = tree.item(selected[0], "values")
+        if not values or len(values) < 2:
+            return None
+        return str(values[1])
+
+    def _open_selected_new_username(self, event=None):
+        username = self._extract_username_from_tree(self.daily_new_tree, event=event)
+        if not username:
+            self._set_message("Select a username in 'New on selected day' first.")
+            return
+        ok, message = _open_instagram_profile(username)
+        self._set_message(message if ok else f"Open profile failed: {message}")
+
+    def _open_selected_lost_username(self, event=None):
+        username = self._extract_username_from_tree(self.daily_lost_tree, event=event)
+        if not username:
+            self._set_message("Select a username in 'Lost on selected day' first.")
+            return
+        ok, message = _open_instagram_profile(username)
+        self._set_message(message if ok else f"Open profile failed: {message}")
 
     def _load_selected_day_details(self):
         day = self._selected_daily_day()
