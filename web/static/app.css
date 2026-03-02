@@ -257,6 +257,23 @@ tbody tr.is-selected {
   color: var(--danger);
 }
 
+.ig-link {
+  color: #91f0ff;
+  text-decoration: underline;
+  text-decoration-color: rgba(145, 240, 255, 0.55);
+  text-underline-offset: 2px;
+}
+
+.ig-link:hover {
+  color: #cff8ff;
+}
+
+.ig-link:focus-visible {
+  outline: 2px solid #cff8ff;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 .toast {
   position: fixed;
   left: 50%;

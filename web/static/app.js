@@ -1,9 +1,45 @@
-const state = {
+﻿const state = {
   selectedDay: null,
   defaultTz: document.body.dataset.defaultTz || "America/Hermosillo",
 };
 
 const $ = (id) => document.getElementById(id);
+
+function escapeHtml(raw) {
+  return String(raw ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function normalizeInstagramUsername(raw) {
+  let value = String(raw ?? "").trim();
+  while (value.startsWith("@")) {
+    value = value.slice(1);
+  }
+  return value;
+}
+
+function instagramProfileUrl(rawUsername) {
+  const username = normalizeInstagramUsername(rawUsername);
+  if (!username) {
+    return null;
+  }
+  return `https://www.instagram.com/${encodeURIComponent(username)}/`;
+}
+
+function instagramUsernameLink(rawUsername) {
+  const username = normalizeInstagramUsername(rawUsername);
+  const url = instagramProfileUrl(username);
+  if (!url) {
+    return "-";
+  }
+  const safeLabel = escapeHtml(username);
+  const safeUrl = escapeHtml(url);
+  return `<a class="ig-link" href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeLabel}</a>`;
+}
 
 function readFilters() {
   return {
@@ -114,10 +150,13 @@ function renderEvents(listId, rows, kind) {
   list.innerHTML = rows
     .map((row) => {
       const cls = kind === "lost" ? "meta lost" : "meta";
+      const usernameLink = instagramUsernameLink(row.username);
+      const rowType = escapeHtml(row.type || "-");
+      const timestamp = escapeHtml(row.timestamp_local || "-");
       return `
         <li>
-          <strong>${row.username}</strong>
-          <span class="${cls}">${row.type} · ${row.timestamp_local || "-"}</span>
+          <strong>${usernameLink}</strong>
+          <span class="${cls}">${rowType} | ${timestamp}</span>
         </li>
       `;
     })
@@ -130,11 +169,15 @@ function renderCurrent(data) {
   $("currentMeta").textContent = `${data.rows.length} rows | ${data.tz_used}`;
   for (const row of data.rows) {
     const tr = document.createElement("tr");
+    const usernameLink = instagramUsernameLink(row.username);
+    const rowType = escapeHtml(row.type || "-");
+    const firstSeen = escapeHtml(row.first_seen_local || "-");
+    const lastSeen = escapeHtml(row.last_seen_local || "-");
     tr.innerHTML = `
-      <td>${row.username}</td>
-      <td>${row.type}</td>
-      <td>${row.first_seen_local || "-"}</td>
-      <td>${row.last_seen_local || "-"}</td>
+      <td>${usernameLink}</td>
+      <td>${rowType}</td>
+      <td>${firstSeen}</td>
+      <td>${lastSeen}</td>
     `;
     body.appendChild(tr);
   }
