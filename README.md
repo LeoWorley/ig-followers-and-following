@@ -19,6 +19,7 @@ Track changes in followers and following over time, store history in SQLite, and
 - `docs/OPERATIONS.md` - local operations runbook.
 - `docs/ARCHITECTURE.md` - system architecture and boundaries.
 - `docs/CLOUD_MIGRATION.md` - migration path from local to cloud.
+- `docs/MANUAL_TESTS.md` - manual validation scenarios.
 
 ## Quick Start (recommended)
 
@@ -256,6 +257,11 @@ API endpoints:
 - `GET /api/v1/daily`
 - `GET /api/v1/day`
 - `GET /api/v1/current`
+
+Profile links:
+- usernames in web day details and current snapshot are clickable
+- selected target can be opened via `Open target profile`
+- GUI daily detail tables support opening profile on username double-click
 
 ## Packaging (standalone binaries)
 

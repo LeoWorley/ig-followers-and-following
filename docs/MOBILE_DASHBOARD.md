@@ -61,7 +61,27 @@ The browser will request Basic Auth credentials (`WEB_AUTH_USER` / `WEB_AUTH_PAS
 4. Day detail (`/api/v1/day`)
 5. Current list snapshot (`/api/v1/current`)
 
-## 6. Troubleshooting
+## 6. Profile links behavior
+
+1. Usernames shown in web lists are clickable profile links:
+   - `Selected Day New`
+   - `Selected Day Lost`
+   - `Current Snapshot`
+2. Selected target can be opened via `Open target profile`.
+3. Link format is always:
+   - `https://www.instagram.com/<username>/`
+4. On mobile devices, this URL usually opens the Instagram app if installed; otherwise it opens the browser.
+
+## 7. GUI shortcut
+
+In desktop GUI (`gui_app.py`), you can double-click usernames in:
+
+1. `New on selected day`
+2. `Lost on selected day`
+
+This opens the same Instagram profile URL in your default browser/app handler.
+
+## 8. Troubleshooting
 
 1. `401 Unauthorized`
    - Validate `WEB_AUTH_USER` and `WEB_AUTH_PASS`.
