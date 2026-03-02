@@ -41,6 +41,33 @@ function instagramUsernameLink(rawUsername) {
   return `<a class="ig-link" href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeLabel}</a>`;
 }
 
+function updateOpenTargetButton() {
+  const button = $("openTargetBtn");
+  if (!button) {
+    return;
+  }
+  const targetRaw = $("target").value;
+  const targetName = normalizeInstagramUsername(targetRaw);
+  const url = instagramProfileUrl(targetName);
+  if (!url) {
+    button.disabled = true;
+    button.dataset.profileUrl = "";
+    return;
+  }
+  button.disabled = false;
+  button.dataset.profileUrl = url;
+}
+
+function openSelectedTargetProfile() {
+  const button = $("openTargetBtn");
+  const url = button ? button.dataset.profileUrl : "";
+  if (!url) {
+    showToast("Select a target first.");
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
 function readFilters() {
   return {
     target: $("target").value || "",
@@ -188,11 +215,21 @@ async function loadTargets() {
   const data = await apiGet("/api/v1/targets", { tz: filters.tz });
   const select = $("target");
   const prev = select.value;
-  select.innerHTML = `<option value="">(all)</option>` +
-    data.targets.map((t) => `<option value="${t}">${t}</option>`).join("");
+  select.innerHTML = "";
+  const allOption = document.createElement("option");
+  allOption.value = "";
+  allOption.textContent = "(all)";
+  select.appendChild(allOption);
+  for (const targetName of data.targets) {
+    const option = document.createElement("option");
+    option.value = targetName;
+    option.textContent = targetName;
+    select.appendChild(option);
+  }
   if ([...select.options].some((opt) => opt.value === prev)) {
     select.value = prev;
   }
+  updateOpenTargetButton();
 }
 
 async function loadDayDetails() {
@@ -258,10 +295,17 @@ async function init() {
   try {
     await loadTargets();
     await refreshAll();
+    updateOpenTargetButton();
   } catch (err) {
     showToast(`Init error: ${err.message}`);
   }
 }
 
 $("refreshBtn").addEventListener("click", refreshAll);
+if ($("openTargetBtn")) {
+  $("openTargetBtn").addEventListener("click", openSelectedTargetProfile);
+}
+if ($("target")) {
+  $("target").addEventListener("change", updateOpenTargetButton);
+}
 init();

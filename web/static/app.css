@@ -140,7 +140,6 @@ select,
 }
 
 .btn {
-  grid-column: 1 / -1;
   cursor: pointer;
   background: linear-gradient(130deg, var(--accent), #0e8f87);
   border: none;
@@ -150,6 +149,18 @@ select,
 
 .btn:hover {
   filter: brightness(1.07);
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  filter: none;
+}
+
+.btn-secondary {
+  background: transparent;
+  border: 1px solid rgba(170, 215, 231, 0.45);
+  color: var(--text);
 }
 
 .grid {
