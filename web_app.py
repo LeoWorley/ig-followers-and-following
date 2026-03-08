@@ -383,7 +383,11 @@ def api_day(
     with _open_db() as conn:
         new_rows = conn.execute(
             """
-            SELECT ff.follower_following_username, ff.is_follower, ff.first_seen_run_at AS ts
+            SELECT
+              t.username AS target_username,
+              ff.follower_following_username,
+              ff.is_follower,
+              ff.first_seen_run_at AS ts
             FROM followers_followings ff
             JOIN targets t ON t.id = ff.target_id
             WHERE ff.first_seen_run_at IS NOT NULL
@@ -401,7 +405,11 @@ def api_day(
         ).fetchall()
         lost_rows = conn.execute(
             """
-            SELECT ff.follower_following_username, ff.is_follower, ff.lost_at_run_at AS ts
+            SELECT
+              t.username AS target_username,
+              ff.follower_following_username,
+              ff.is_follower,
+              ff.lost_at_run_at AS ts
             FROM followers_followings ff
             JOIN targets t ON t.id = ff.target_id
             WHERE ff.lost_at_run_at IS NOT NULL
@@ -423,6 +431,7 @@ def api_day(
         for row in rows:
             payload.append(
                 {
+                    "target": row["target_username"],
                     "username": row["follower_following_username"],
                     "type": "follower" if int(row["is_follower"]) == 1 else "following",
                     "timestamp_local": _to_tz_iso(row["ts"], tzinfo),

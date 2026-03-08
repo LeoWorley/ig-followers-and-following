@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>IG Tracker Web</title>
+    <title>IG Tracker</title>
     <link rel="stylesheet" href="/static/app.css">
   </head>
   <body data-default-tz="{{ default_tz }}">
@@ -12,72 +12,92 @@
 
     <main class="shell">
       <header class="hero">
-        <p class="eyebrow">Private Mobile Dashboard</p>
-        <h1>IG Tracker</h1>
-        <p class="subtitle">Read-only analytics over your local tracker DB.</p>
+        <div class="hero-top">
+          <div>
+            <p id="heroEyebrow" class="eyebrow">Instagram activity dashboard</p>
+            <h1 id="heroTitle">IG Tracker</h1>
+            <p id="heroSubtitle" class="subtitle">See who follows, unfollows, and who each account follows.</p>
+          </div>
+          <div class="lang-switch" role="group" aria-label="Language">
+            <button id="langEnBtn" class="lang-btn" type="button" data-lang="en">EN</button>
+            <button id="langEsBtn" class="lang-btn" type="button" data-lang="es">ES</button>
+          </div>
+        </div>
       </header>
 
       <section class="panel filters">
         <div class="field">
-          <label for="target">Target</label>
+          <label id="targetLabel" for="target">Instagram account</label>
           <select id="target"></select>
         </div>
         <div class="field">
-          <label>&nbsp;</label>
-          <button id="openTargetBtn" class="btn btn-secondary" type="button" disabled>Open target profile</button>
-        </div>
-        <div class="field">
-          <label for="listType">Type</label>
+          <label id="listTypeLabel" for="listType">Show</label>
           <select id="listType">
-            <option value="both">both</option>
-            <option value="followers">followers</option>
-            <option value="followings">followings</option>
+            <option value="both">Followers and following</option>
+            <option value="followers">Followers only</option>
+            <option value="followings">Following only</option>
           </select>
         </div>
         <div class="field">
-          <label for="days">Days</label>
+          <label id="daysLabel" for="days">Look back</label>
           <input id="days" type="number" min="1" max="365" value="30">
         </div>
-        <div class="field field-wide">
-          <label for="tz">Timezone</label>
-          <input id="tz" type="text" value="{{ default_tz }}">
+        <div class="field">
+          <label>&nbsp;</label>
+          <button id="refreshBtn" class="btn" type="button">Refresh</button>
         </div>
-        <button id="refreshBtn" class="btn">Refresh</button>
+        <div class="field field-wide">
+          <label>&nbsp;</label>
+          <button id="openTargetBtn" class="btn btn-secondary" type="button" disabled>Open Instagram profile</button>
+        </div>
       </section>
 
       <section class="grid">
         <article class="panel">
-          <h2>Health</h2>
+          <div class="panel-head panel-head-stack">
+            <div>
+              <h2 id="healthTitle">Update status</h2>
+              <p id="healthHelp" class="panel-copy">Simple status about whether your Instagram data is available and when it was last updated.</p>
+            </div>
+          </div>
           <dl id="health" class="kv-list"></dl>
         </article>
 
         <article class="panel">
-          <h2>Overview (Today)</h2>
+          <div class="panel-head panel-head-stack">
+            <div>
+              <h2 id="overviewTitle">Today at a glance</h2>
+              <p id="overviewHelp" class="panel-copy">A quick summary of current followers, following, and today&rsquo;s changes.</p>
+            </div>
+          </div>
           <div class="metric-grid">
-            <div><span>Current Followers</span><strong id="mCurrentFollowers">0</strong></div>
-            <div><span>Current Followings</span><strong id="mCurrentFollowings">0</strong></div>
-            <div><span>New Followers</span><strong id="mNewFollowers">0</strong></div>
-            <div><span>Lost Followers</span><strong id="mLostFollowers">0</strong></div>
-            <div><span>New Followings</span><strong id="mNewFollowings">0</strong></div>
-            <div><span>Lost Followings</span><strong id="mLostFollowings">0</strong></div>
+            <div><span id="mCurrentFollowersLabel">Followers now</span><strong id="mCurrentFollowers">0</strong></div>
+            <div><span id="mCurrentFollowingsLabel">Following now</span><strong id="mCurrentFollowings">0</strong></div>
+            <div><span id="mNewFollowersLabel">New followers today</span><strong id="mNewFollowers">0</strong></div>
+            <div><span id="mLostFollowersLabel">Lost followers today</span><strong id="mLostFollowers">0</strong></div>
+            <div><span id="mNewFollowingsLabel">Started following today</span><strong id="mNewFollowings">0</strong></div>
+            <div><span id="mLostFollowingsLabel">Stopped following today</span><strong id="mLostFollowings">0</strong></div>
           </div>
         </article>
       </section>
 
       <section class="panel">
-        <div class="panel-head">
-          <h2>Daily Changes</h2>
+        <div class="panel-head panel-head-stack">
+          <div>
+            <h2 id="dailyTitle">Changes by day</h2>
+            <p id="dailyHelp" class="panel-copy">Choose a day to see who followed, unfollowed, or changed in the following list.</p>
+          </div>
           <small id="dailyMeta"></small>
         </div>
         <div class="table-wrap">
           <table id="dailyTable">
             <thead>
               <tr>
-                <th>Day</th>
-                <th>New F</th>
-                <th>Lost F</th>
-                <th>New FG</th>
-                <th>Lost FG</th>
+                <th id="dailyDayHeader">Day</th>
+                <th id="dailyNewFollowersHeader">New followers</th>
+                <th id="dailyLostFollowersHeader">Lost followers</th>
+                <th id="dailyNewFollowingsHeader">Started following</th>
+                <th id="dailyLostFollowingsHeader">Stopped following</th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -87,31 +107,43 @@
 
       <section class="grid">
         <article class="panel">
-          <div class="panel-head">
-            <h2>Selected Day New</h2>
+          <div class="panel-head panel-head-stack">
+            <div>
+              <h2 id="newTitle">Added on selected day</h2>
+              <p id="newHelp" class="panel-copy">People or accounts added on the day you select above.</p>
+            </div>
             <small id="dayChosen">-</small>
           </div>
           <ul id="newList" class="event-list"></ul>
         </article>
         <article class="panel">
-          <h2>Selected Day Lost</h2>
+          <div class="panel-head panel-head-stack">
+            <div>
+              <h2 id="lostTitle">Removed on selected day</h2>
+              <p id="lostHelp" class="panel-copy">People or accounts removed on the day you select above.</p>
+            </div>
+          </div>
           <ul id="lostList" class="event-list"></ul>
         </article>
       </section>
 
       <section class="panel">
-        <div class="panel-head">
-          <h2>Current Snapshot</h2>
+        <div class="panel-head panel-head-stack">
+          <div>
+            <h2 id="currentTitle">Current followers and following</h2>
+            <p id="currentHelp" class="panel-copy">The people following this account and the accounts it currently follows.</p>
+          </div>
           <small id="currentMeta"></small>
         </div>
         <div class="table-wrap">
           <table id="currentTable">
             <thead>
-              <tr>
-                <th>Username</th>
-                <th>Type</th>
-                <th>First Seen</th>
-                <th>Last Seen</th>
+              <tr id="currentHeaderRow">
+                <th id="currentTargetHeader">Account</th>
+                <th id="currentUsernameHeader">Username</th>
+                <th id="currentTypeHeader">Relationship</th>
+                <th id="currentFirstSeenHeader">Tracking since</th>
+                <th id="currentLastSeenHeader">Last seen</th>
               </tr>
             </thead>
             <tbody></tbody>
