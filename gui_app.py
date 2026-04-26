@@ -40,10 +40,100 @@ OPTIONS_POLL_SECONDS = int(os.getenv("GUI_OPTIONS_POLL_SECONDS", "30"))
 AUTO_START = os.getenv("GUI_AUTO_START", "false").lower() == "true"
 MONITOR_ONLY = os.getenv("GUI_MONITOR_ONLY", os.getenv("TRAY_MONITOR_ONLY", "false")).lower() == "true"
 REQUIRED_ENV_KEYS = ("IG_USERNAME", "IG_PASSWORD", "TARGET_ACCOUNT")
+TRACKER_SERVICE_NAME = "IG Tracker"
+WEB_SERVICE_NAME = "IG Tracker Web"
+WEB_PORT_DEFAULT = int(os.getenv("WEB_PORT", "8088"))
+WEB_HOST_DEFAULT = os.getenv("WEB_HOST", "127.0.0.1")
 
 _process_lock = threading.Lock()
 _process = None
 _log_handle = None
+
+
+def _nssm_path():
+    local = ROOT_DIR / "nssm.exe"
+    if local.exists():
+        return local
+    import shutil
+    found = shutil.which("nssm")
+    return Path(found) if found else None
+
+
+def _service_status(service_name):
+    if not sys.platform.startswith("win"):
+        return "unsupported"
+    try:
+        result = subprocess.run(
+            ["sc", "query", service_name],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            check=False,
+        )
+        out = result.stdout
+        if result.returncode != 0 or "does not exist" in out.lower() or "1060" in out:
+            return "not_installed"
+        out_up = out.upper()
+        if "RUNNING" in out_up:
+            return "running"
+        if "STOPPED" in out_up:
+            return "stopped"
+        return "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _update_env_key(key, value):
+    lines = []
+    if ENV_PATH.exists():
+        with open(ENV_PATH, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    found = False
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        k = stripped.split("=", 1)[0].strip() if "=" in stripped else ""
+        if k == key:
+            new_lines.append(f"{key}={value}\n")
+            found = True
+        else:
+            new_lines.append(line)
+    if not found:
+        new_lines.append(f"{key}={value}\n")
+    with open(ENV_PATH, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+
+
+def _run_elevated_ps(commands):
+    import tempfile
+    script = "\r\n".join(commands)
+    fd, tmp_path = tempfile.mkstemp(suffix=".ps1")
+    try:
+        os.close(fd)
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(script)
+        subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                (
+                    f'Start-Process powershell -Verb RunAs -Wait '
+                    f'-ArgumentList \'-NoProfile -ExecutionPolicy Bypass -File "{tmp_path}"\''
+                ),
+            ],
+            check=False,
+            timeout=120,
+        )
+    except Exception:
+        pass
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
 
 
 def _tool_cmd(script_name: str, exe_name: str):
@@ -428,6 +518,19 @@ class TrackerGUI:
         self.stale_status_var = tk.StringVar(value="Freshness: unknown")
         self.session_monitor_only = tk.BooleanVar(value=MONITOR_ONLY)
         self._auto_mode_applied = False
+        self.nssm_status_var = tk.StringVar(value="Checking...")
+        self.tracker_svc_var = tk.StringVar(value="Checking...")
+        self.web_svc_var = tk.StringVar(value="Checking...")
+        self.tracker_svc_install_btn = None
+        self.tracker_svc_start_btn = None
+        self.tracker_svc_stop_btn = None
+        self.tracker_svc_restart_btn = None
+        self.tracker_svc_remove_btn = None
+        self.web_svc_install_btn = None
+        self.web_svc_start_btn = None
+        self.web_svc_stop_btn = None
+        self.web_svc_restart_btn = None
+        self.web_svc_remove_btn = None
 
         self.available_dates = []
         self.available_targets = []
@@ -644,6 +747,270 @@ class TrackerGUI:
         self.wizard_tree.configure(yscrollcommand=wizard_scroll.set)
         self.wizard_tree.grid(row=0, column=0, sticky="nsew")
         wizard_scroll.grid(row=0, column=1, sticky="ns")
+
+        self._build_services_section(parent)
+
+    def _build_services_section(self, parent):
+        svc_frame = ttk.LabelFrame(parent, text="Windows Services (run at boot, no login needed)")
+        svc_frame.grid(row=2, column=0, sticky="ew", padx=4, pady=4)
+        svc_frame.columnconfigure(1, weight=1)
+
+        nssm_row = ttk.Frame(svc_frame)
+        nssm_row.grid(row=0, column=0, columnspan=2, sticky="ew", padx=6, pady=(6, 2))
+        ttk.Label(nssm_row, text="NSSM:").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        ttk.Label(nssm_row, textvariable=self.nssm_status_var, foreground="#444").grid(row=0, column=1, sticky="w")
+        ttk.Button(nssm_row, text="Browse nssm.exe", command=self._browse_nssm_clicked).grid(row=0, column=2, padx=(12, 0))
+
+        tr_row = ttk.Frame(svc_frame)
+        tr_row.grid(row=1, column=0, columnspan=2, sticky="ew", padx=6, pady=2)
+        ttk.Label(tr_row, text="Tracker service:", width=16).grid(row=0, column=0, sticky="w", padx=(0, 6))
+        ttk.Label(tr_row, textvariable=self.tracker_svc_var, width=14).grid(row=0, column=1, sticky="w")
+        self.tracker_svc_install_btn = ttk.Button(tr_row, text="Install & Start", command=self._install_tracker_svc_clicked)
+        self.tracker_svc_install_btn.grid(row=0, column=2, padx=2)
+        self.tracker_svc_start_btn = ttk.Button(tr_row, text="Start service", command=lambda: self._start_svc_clicked(TRACKER_SERVICE_NAME))
+        self.tracker_svc_start_btn.grid(row=0, column=3, padx=2)
+        self.tracker_svc_stop_btn = ttk.Button(tr_row, text="Stop service", command=lambda: self._stop_svc_clicked(TRACKER_SERVICE_NAME))
+        self.tracker_svc_stop_btn.grid(row=0, column=4, padx=2)
+        self.tracker_svc_restart_btn = ttk.Button(tr_row, text="Restart", command=lambda: self._restart_svc_clicked(TRACKER_SERVICE_NAME))
+        self.tracker_svc_restart_btn.grid(row=0, column=5, padx=2)
+        self.tracker_svc_remove_btn = ttk.Button(tr_row, text="Uninstall", command=self._remove_tracker_svc_clicked)
+        self.tracker_svc_remove_btn.grid(row=0, column=6, padx=2)
+
+        web_row = ttk.Frame(svc_frame)
+        web_row.grid(row=2, column=0, columnspan=2, sticky="ew", padx=6, pady=2)
+        ttk.Label(web_row, text="Web server service:", width=16).grid(row=0, column=0, sticky="w", padx=(0, 6))
+        ttk.Label(web_row, textvariable=self.web_svc_var, width=14).grid(row=0, column=1, sticky="w")
+        self.web_svc_install_btn = ttk.Button(web_row, text="Install & Start", command=self._install_web_svc_clicked)
+        self.web_svc_install_btn.grid(row=0, column=2, padx=2)
+        self.web_svc_start_btn = ttk.Button(web_row, text="Start service", command=lambda: self._start_svc_clicked(WEB_SERVICE_NAME))
+        self.web_svc_start_btn.grid(row=0, column=3, padx=2)
+        self.web_svc_stop_btn = ttk.Button(web_row, text="Stop service", command=lambda: self._stop_svc_clicked(WEB_SERVICE_NAME))
+        self.web_svc_stop_btn.grid(row=0, column=4, padx=2)
+        self.web_svc_restart_btn = ttk.Button(web_row, text="Restart", command=lambda: self._restart_svc_clicked(WEB_SERVICE_NAME))
+        self.web_svc_restart_btn.grid(row=0, column=5, padx=2)
+        self.web_svc_remove_btn = ttk.Button(web_row, text="Uninstall", command=self._remove_web_svc_clicked)
+        self.web_svc_remove_btn.grid(row=0, column=6, padx=2)
+
+        bottom = ttk.Frame(svc_frame)
+        bottom.grid(row=3, column=0, columnspan=2, sticky="ew", padx=6, pady=(4, 6))
+        ttk.Button(bottom, text="Refresh status", command=self._refresh_services_status).grid(row=0, column=0, padx=(0, 12))
+        ttk.Label(bottom, text="Install / Uninstall will show a Windows administrator (UAC) prompt.", foreground="#666").grid(row=0, column=1, sticky="w")
+
+        self._refresh_services_status()
+
+    def _refresh_services_status(self):
+        if self.tracker_svc_install_btn is None:
+            return
+        nssm = _nssm_path()
+        if nssm:
+            self.nssm_status_var.set(f"Found: {nssm.name}  ({nssm})")
+        else:
+            self.nssm_status_var.set("Not found — place nssm.exe in the project folder, or use Browse")
+        nssm_ok = nssm is not None
+
+        tr_status = _service_status(TRACKER_SERVICE_NAME)
+        web_status = _service_status(WEB_SERVICE_NAME)
+
+        label_map = {
+            "running": "Running",
+            "stopped": "Stopped",
+            "not_installed": "Not installed",
+            "unknown": "Unknown",
+            "unsupported": "N/A (Windows only)",
+        }
+        self.tracker_svc_var.set(label_map.get(tr_status, tr_status))
+        self.web_svc_var.set(label_map.get(web_status, web_status))
+
+        tr_installed = tr_status in ("running", "stopped", "unknown")
+        web_installed = web_status in ("running", "stopped", "unknown")
+
+        def _s(ok):
+            return tk.NORMAL if ok else tk.DISABLED
+
+        self.tracker_svc_install_btn.configure(state=_s(nssm_ok and not tr_installed))
+        self.tracker_svc_start_btn.configure(state=_s(tr_status == "stopped"))
+        self.tracker_svc_stop_btn.configure(state=_s(tr_status == "running"))
+        self.tracker_svc_restart_btn.configure(state=_s(tr_status == "running"))
+        self.tracker_svc_remove_btn.configure(state=_s(nssm_ok and tr_installed))
+
+        self.web_svc_install_btn.configure(state=_s(nssm_ok and not web_installed))
+        self.web_svc_start_btn.configure(state=_s(web_status == "stopped"))
+        self.web_svc_stop_btn.configure(state=_s(web_status == "running"))
+        self.web_svc_restart_btn.configure(state=_s(web_status == "running"))
+        self.web_svc_remove_btn.configure(state=_s(nssm_ok and web_installed))
+
+    def _browse_nssm_clicked(self):
+        import shutil
+        path = filedialog.askopenfilename(
+            title="Select nssm.exe",
+            filetypes=[("NSSM executable", "nssm.exe"), ("All files", "*.*")],
+            initialdir=str(ROOT_DIR),
+        )
+        if not path:
+            return
+        dest = ROOT_DIR / "nssm.exe"
+        try:
+            shutil.copy2(path, dest)
+            self._set_message(f"Copied nssm.exe to {dest}")
+            self._refresh_services_status()
+        except Exception as exc:
+            self._set_message(f"Could not copy nssm.exe: {exc}")
+
+    def _install_tracker_svc_clicked(self):
+        nssm = _nssm_path()
+        if not nssm:
+            self._set_message("nssm.exe not found. Place it in the project folder first.")
+            return
+        python = ROOT_DIR / "venv" / "Scripts" / "python.exe"
+        if not python.exists():
+            python = Path(sys.executable)
+        commands = [
+            f'& "{nssm}" install "{TRACKER_SERVICE_NAME}" "{python}"',
+            f'& "{nssm}" set "{TRACKER_SERVICE_NAME}" AppParameters "main.py"',
+            f'& "{nssm}" set "{TRACKER_SERVICE_NAME}" AppDirectory "{ROOT_DIR}"',
+            f'& "{nssm}" set "{TRACKER_SERVICE_NAME}" AppStdout "{LOG_PATH}"',
+            f'& "{nssm}" set "{TRACKER_SERVICE_NAME}" AppStderr "{LOG_PATH}"',
+            f'& "{nssm}" set "{TRACKER_SERVICE_NAME}" AppRotateFiles 1',
+            f'& "{nssm}" set "{TRACKER_SERVICE_NAME}" Start SERVICE_AUTO_START',
+            f'Start-Service "{TRACKER_SERVICE_NAME}"',
+        ]
+        self._set_message("Installing tracker service — approve the UAC prompt...")
+
+        def _worker():
+            _run_elevated_ps(commands)
+            try:
+                _update_env_key("TRAY_AUTO_START", "false")
+            except Exception:
+                pass
+
+            def _done():
+                self._set_message("Tracker service installed and started.")
+                self._refresh_services_status()
+
+            self.root.after(0, _done)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _install_web_svc_clicked(self):
+        nssm = _nssm_path()
+        if not nssm:
+            self._set_message("nssm.exe not found. Place it in the project folder first.")
+            return
+        python = ROOT_DIR / "venv" / "Scripts" / "python.exe"
+        if not python.exists():
+            python = Path(sys.executable)
+        port = os.getenv("WEB_PORT", str(WEB_PORT_DEFAULT))
+        host = os.getenv("WEB_HOST", WEB_HOST_DEFAULT)
+        web_args = (
+            f"-m uvicorn web_app:app --host {host} --port {port} "
+            "--proxy-headers --forwarded-allow-ips=127.0.0.1"
+        )
+        commands = [
+            f'& "{nssm}" install "{WEB_SERVICE_NAME}" "{python}"',
+            f'& "{nssm}" set "{WEB_SERVICE_NAME}" AppParameters "{web_args}"',
+            f'& "{nssm}" set "{WEB_SERVICE_NAME}" AppDirectory "{ROOT_DIR}"',
+            f'& "{nssm}" set "{WEB_SERVICE_NAME}" AppStdout "{LOG_PATH}"',
+            f'& "{nssm}" set "{WEB_SERVICE_NAME}" AppStderr "{LOG_PATH}"',
+            f'& "{nssm}" set "{WEB_SERVICE_NAME}" AppRotateFiles 1',
+            f'& "{nssm}" set "{WEB_SERVICE_NAME}" Start SERVICE_AUTO_START',
+            f'Start-Service "{WEB_SERVICE_NAME}"',
+        ]
+        self._set_message("Installing web service — approve the UAC prompt...")
+
+        def _worker():
+            _run_elevated_ps(commands)
+            try:
+                _update_env_key("TRAY_WEB_AUTO_START", "false")
+            except Exception:
+                pass
+
+            def _done():
+                self._set_message("Web service installed and started.")
+                self._refresh_services_status()
+
+            self.root.after(0, _done)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _remove_tracker_svc_clicked(self):
+        nssm = _nssm_path()
+        if not nssm:
+            self._set_message("nssm.exe not found.")
+            return
+        commands = [f'& "{nssm}" remove "{TRACKER_SERVICE_NAME}" confirm']
+        self._set_message("Uninstalling tracker service — approve the UAC prompt...")
+
+        def _worker():
+            _run_elevated_ps(commands)
+
+            def _done():
+                self._set_message("Tracker service removed.")
+                self._refresh_services_status()
+
+            self.root.after(0, _done)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _remove_web_svc_clicked(self):
+        nssm = _nssm_path()
+        if not nssm:
+            self._set_message("nssm.exe not found.")
+            return
+        commands = [f'& "{nssm}" remove "{WEB_SERVICE_NAME}" confirm']
+        self._set_message("Uninstalling web service — approve the UAC prompt...")
+
+        def _worker():
+            _run_elevated_ps(commands)
+
+            def _done():
+                self._set_message("Web service removed.")
+                self._refresh_services_status()
+
+            self.root.after(0, _done)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _start_svc_clicked(self, service_name):
+        self._set_message(f"Starting {service_name} — approve the UAC prompt...")
+
+        def _worker():
+            _run_elevated_ps([f'Start-Service "{service_name}"'])
+
+            def _done():
+                self._set_message(f"{service_name} started.")
+                self._refresh_services_status()
+
+            self.root.after(0, _done)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _stop_svc_clicked(self, service_name):
+        self._set_message(f"Stopping {service_name} — approve the UAC prompt...")
+
+        def _worker():
+            _run_elevated_ps([f'Stop-Service "{service_name}" -Force'])
+
+            def _done():
+                self._set_message(f"{service_name} stopped.")
+                self._refresh_services_status()
+
+            self.root.after(0, _done)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _restart_svc_clicked(self, service_name):
+        self._set_message(f"Restarting {service_name} — approve the UAC prompt...")
+
+        def _worker():
+            _run_elevated_ps([f'Restart-Service "{service_name}" -Force'])
+
+            def _done():
+                self._set_message(f"{service_name} restarted.")
+                self._refresh_services_status()
+
+            self.root.after(0, _done)
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _build_reports_tab(self, parent):
         parent.columnconfigure(0, weight=1)
@@ -1357,6 +1724,7 @@ class TrackerGUI:
         self.cookie_status_var.set(self._cookie_health_text())
         self.error_status_var.set(self._last_error_text())
         self.stale_status_var.set(self._freshness_text())
+        self._refresh_services_status()
         running = _is_running()
         last_run = _read_last_run()
         if last_run:

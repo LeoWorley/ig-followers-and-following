@@ -30,6 +30,10 @@ POLL_SECONDS = int(os.getenv("TRAY_STATUS_POLL_SECONDS", "5"))
 AUTO_START = os.getenv("TRAY_AUTO_START", "false").lower() == "true"
 MONITOR_ONLY = os.getenv("TRAY_MONITOR_ONLY", "false").lower() == "true"
 AUTO_MONITOR_ON_SCHEDULER = os.getenv("TRAY_AUTO_MONITOR_ON_SCHEDULER", "true").lower() == "true"
+WEB_PORT = int(os.getenv("WEB_PORT", "8088"))
+WEB_HOST = os.getenv("WEB_HOST", "127.0.0.1")
+WEB_ENABLED = os.getenv("WEB_ENABLED", "true").lower() == "true"
+TRAY_WEB_AUTO_START = os.getenv("TRAY_WEB_AUTO_START", "true").lower() == "true"
 
 _process_lock = threading.Lock()
 _process = None
@@ -37,6 +41,10 @@ _log_handle = None
 _stop_event = threading.Event()
 _runtime_monitor_only = MONITOR_ONLY
 _scheduler_detected = False
+
+_web_process_lock = threading.Lock()
+_web_process = None
+_web_log_handle = None
 
 
 def _tool_cmd(script_name: str, exe_name: str):
@@ -60,11 +68,45 @@ def _detect_scheduler_tracker():
             check=False,
         )
         text = (result.stdout or "").lower()
-        return (
+        if (
             "main.py" in text
             or "ig-tracker-cli.exe" in text
             or "ig-followers-and-following" in text
+        ):
+            return True
+    except Exception:
+        pass
+    try:
+        result = subprocess.run(
+            ["sc", "query", "IG Tracker"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            check=False,
         )
+        if result.returncode == 0 and "does not exist" not in result.stdout.lower():
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _detect_web_service():
+    if not sys.platform.startswith("win"):
+        return False
+    try:
+        result = subprocess.run(
+            ["sc", "query", "IG Tracker Web"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            check=False,
+        )
+        return result.returncode == 0 and "does not exist" not in result.stdout.lower()
     except Exception:
         return False
 
@@ -94,6 +136,93 @@ def _cleanup_process_if_needed():
                 except Exception:
                     pass
                 _log_handle = None
+
+
+def _cleanup_web_process_if_needed():
+    global _web_process, _web_log_handle
+    with _web_process_lock:
+        if _web_process is not None and _web_process.poll() is not None:
+            _web_process = None
+            if _web_log_handle:
+                try:
+                    _web_log_handle.close()
+                except Exception:
+                    pass
+                _web_log_handle = None
+
+
+def _is_web_managed_running():
+    with _web_process_lock:
+        return _web_process is not None and _web_process.poll() is None
+
+
+def _check_web_port() -> bool:
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", WEB_PORT), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def _web_cmd():
+    if IS_FROZEN:
+        exe = BIN_DIR / "ig-tracker-web.exe"
+        return [str(exe)] if exe.exists() else None
+    return [
+        sys.executable,
+        "-u",
+        "-m",
+        "uvicorn",
+        "web_app:app",
+        "--host",
+        WEB_HOST,
+        "--port",
+        str(WEB_PORT),
+        "--proxy-headers",
+        "--forwarded-allow-ips=127.0.0.1",
+    ]
+
+
+def _start_web(_=None):
+    global _web_process, _web_log_handle
+    if not WEB_ENABLED:
+        return
+    cmd = _web_cmd()
+    if not cmd:
+        return
+    with _web_process_lock:
+        if _web_process is not None and _web_process.poll() is None:
+            return
+        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _web_log_handle = open(LOG_PATH, "a", encoding="utf-8")
+        _web_process = subprocess.Popen(
+            cmd,
+            cwd=str(ROOT_DIR),
+            env=_tracker_env(),
+            stdout=_web_log_handle,
+            stderr=_web_log_handle,
+        )
+
+
+def _stop_web(_=None):
+    global _web_process, _web_log_handle
+    with _web_process_lock:
+        if _web_process is None or _web_process.poll() is not None:
+            _cleanup_web_process_if_needed()
+            return
+        _web_process.terminate()
+        try:
+            _web_process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            _web_process.kill()
+        _web_process = None
+        if _web_log_handle:
+            try:
+                _web_log_handle.close()
+            except Exception:
+                pass
+            _web_log_handle = None
 
 
 def _tracker_env(overrides=None):
@@ -410,7 +539,8 @@ def _status_title():
     else:
         state = "Running" if running else "Stopped"
     title = f"{APP_TITLE}: {state} ({mode})"
-    title = f"{title} | {_cookie_status()} | {_last_error_short()}"
+    web_status = "web:up" if _check_web_port() else "web:down"
+    title = f"{title} | {_cookie_status()} | {_last_error_short()} | {web_status}"
     if last_run:
         when = _format_dt(last_run.get("finished_at") or last_run.get("started_at"))
         status = last_run.get("status") or "unknown"
@@ -421,6 +551,7 @@ def _status_title():
 def _update_loop(icon):
     while not _stop_event.is_set():
         _cleanup_process_if_needed()
+        _cleanup_web_process_if_needed()
         icon.title = _status_title()
         time.sleep(POLL_SECONDS)
 
@@ -428,6 +559,7 @@ def _update_loop(icon):
 def _quit_app(icon, _):
     _stop_event.set()
     _stop_tracker()
+    _stop_web()
     icon.stop()
 
 
@@ -449,6 +581,8 @@ def _menu():
         pystray.MenuItem("Start tracker", _start_tracker, enabled=lambda _: (not _runtime_monitor_only and not _is_running())),
         pystray.MenuItem("Stop tracker", _stop_tracker, enabled=lambda _: (not _runtime_monitor_only and _is_running())),
         pystray.MenuItem("Login-only (visible browser)", _run_login_only, enabled=lambda _: (not _runtime_monitor_only and not _is_running())),
+        pystray.MenuItem("Start web server", _start_web, enabled=lambda _: WEB_ENABLED and not _is_web_managed_running()),
+        pystray.MenuItem("Stop web server", _stop_web, enabled=lambda _: WEB_ENABLED and _is_web_managed_running()),
         pystray.MenuItem("Reports", reports_menu),
         pystray.MenuItem("Open GUI", _open_gui),
         pystray.MenuItem("Open log", _open_log),
@@ -467,6 +601,8 @@ def main():
     threading.Thread(target=_update_loop, args=(icon,), daemon=True).start()
     if AUTO_START and not _runtime_monitor_only:
         _start_tracker()
+    if TRAY_WEB_AUTO_START and WEB_ENABLED and not _detect_web_service():
+        _start_web()
     icon.run()
 
 
