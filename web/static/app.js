@@ -9,19 +9,24 @@ const translations = {
     listTypeLabel: "Show",
     daysLabel: "Look back (days)",
     refreshBtn: "Refresh",
+    refreshLoading: "Refreshing...",
+    lastRefreshed: "Last refreshed {time}",
+    notRefreshed: "Not refreshed yet",
     openTargetBtn: "Open Instagram profile",
     healthTitle: "Update status",
-    healthHelp: "Simple status about whether your Instagram data is available and when it was last updated.",
+    healthHelp: "Data availability and last successful tracker run.",
     overviewTitle: "Today at a glance",
-    overviewHelp: "A quick summary of current followers, following, and today changes.",
+    overviewHelp: "Current totals and movement recorded today.",
     dailyTitle: "Changes by day",
-    dailyHelp: "Choose a day to see who followed, unfollowed, or changed in the following list.",
+    dailyHelp: "Select a row to inspect additions and removals.",
     newTitle: "Added on selected day",
-    newHelp: "People or accounts added on the day you select above.",
+    newHelp: "New relationships recorded for the selected day.",
     lostTitle: "Removed on selected day",
-    lostHelp: "People or accounts removed on the day you select above.",
+    lostHelp: "Relationships removed on the selected day.",
     currentTitle: "Current followers and following",
-    currentHelp: "The people following this account and the accounts it currently follows.",
+    currentHelp: "Currently active relationships from the latest snapshot.",
+    currentSearchLabel: "Search usernames",
+    currentSearchPlaceholder: "Search @username",
     metricCurrentFollowers: "Followers now",
     metricCurrentFollowings: "Following now",
     metricNewFollowers: "New followers today",
@@ -58,7 +63,9 @@ const translations = {
     emptyCurrent: "No accounts match this view right now.",
     dailyMeta: "Showing the last {days} days",
     currentMeta: "Showing {count} accounts",
+    currentMetaFiltered: "Showing {count} of {total} accounts",
     selectTargetFirst: "Choose an Instagram account first.",
+    emptyCurrentSearch: "No accounts match this search.",
     dayDetailsError: "Could not load that day: {message}",
     refreshError: "Could not refresh the dashboard: {message}",
     initError: "Could not load the dashboard: {message}",
@@ -80,19 +87,24 @@ const translations = {
     listTypeLabel: "Mostrar",
     daysLabel: "Dias hacia atras",
     refreshBtn: "Actualizar",
+    refreshLoading: "Actualizando...",
+    lastRefreshed: "Actualizado por ultima vez {time}",
+    notRefreshed: "Aun no se actualiza",
     openTargetBtn: "Abrir perfil de Instagram",
     healthTitle: "Estado de actualizacion",
-    healthHelp: "Estado simple para saber si tus datos de Instagram estan disponibles y cuando se actualizaron por ultima vez.",
+    healthHelp: "Disponibilidad de datos y ultima ejecucion exitosa.",
     overviewTitle: "Resumen de hoy",
-    overviewHelp: "Un resumen rapido de seguidores, seguidos y cambios de hoy.",
+    overviewHelp: "Totales actuales y movimiento registrado hoy.",
     dailyTitle: "Cambios por dia",
-    dailyHelp: "Elige un dia para ver quien empezo a seguir, dejo de seguir o cambio en la lista de seguidos.",
+    dailyHelp: "Selecciona una fila para revisar agregados y eliminados.",
     newTitle: "Agregado en el dia seleccionado",
-    newHelp: "Personas o cuentas agregadas en el dia que eliges arriba.",
+    newHelp: "Relaciones nuevas registradas para el dia seleccionado.",
     lostTitle: "Eliminado en el dia seleccionado",
-    lostHelp: "Personas o cuentas eliminadas en el dia que eliges arriba.",
+    lostHelp: "Relaciones eliminadas en el dia seleccionado.",
     currentTitle: "Seguidores y seguidos actuales",
-    currentHelp: "Las personas que siguen esta cuenta y las cuentas que esta cuenta sigue ahora.",
+    currentHelp: "Relaciones activas segun la captura mas reciente.",
+    currentSearchLabel: "Buscar usuarios",
+    currentSearchPlaceholder: "Buscar @usuario",
     metricCurrentFollowers: "Seguidores ahora",
     metricCurrentFollowings: "Siguiendo ahora",
     metricNewFollowers: "Nuevos seguidores hoy",
@@ -129,7 +141,9 @@ const translations = {
     emptyCurrent: "No hay cuentas para mostrar en esta vista ahora.",
     dailyMeta: "Mostrando los ultimos {days} dias",
     currentMeta: "Mostrando {count} cuentas",
+    currentMetaFiltered: "Mostrando {count} de {total} cuentas",
     selectTargetFirst: "Primero elige una cuenta de Instagram.",
+    emptyCurrentSearch: "No hay cuentas que coincidan con esta busqueda.",
     dayDetailsError: "No se pudo cargar ese dia: {message}",
     refreshError: "No se pudo actualizar el panel: {message}",
     initError: "No se pudo cargar el panel: {message}",
@@ -157,6 +171,8 @@ const state = {
     day: null,
   },
   lastFilters: null,
+  isRefreshing: false,
+  lastRefreshedAt: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -242,7 +258,10 @@ function localizeStaticText() {
   $("targetLabel").textContent = t("targetLabel");
   $("listTypeLabel").textContent = t("listTypeLabel");
   $("daysLabel").textContent = t("daysLabel");
-  $("refreshBtn").textContent = t("refreshBtn");
+  $("refreshBtn").textContent = state.isRefreshing ? t("refreshLoading") : t("refreshBtn");
+  $("lastRefreshMeta").textContent = state.lastRefreshedAt
+    ? t("lastRefreshed", { time: formatDateTime(state.lastRefreshedAt) })
+    : t("notRefreshed");
   $("openTargetBtn").textContent = t("openTargetBtn");
   $("healthTitle").textContent = t("healthTitle");
   $("healthHelp").textContent = t("healthHelp");
@@ -256,6 +275,8 @@ function localizeStaticText() {
   $("lostHelp").textContent = t("lostHelp");
   $("currentTitle").textContent = t("currentTitle");
   $("currentHelp").textContent = t("currentHelp");
+  $("currentSearchLabel").textContent = t("currentSearchLabel");
+  $("currentSearch").placeholder = t("currentSearchPlaceholder");
   $("mCurrentFollowersLabel").textContent = t("metricCurrentFollowers");
   $("mCurrentFollowingsLabel").textContent = t("metricCurrentFollowings");
   $("mNewFollowersLabel").textContent = t("metricNewFollowers");
@@ -323,6 +344,10 @@ function formatDay(value) {
 
 function formatCount(value) {
   return new Intl.NumberFormat(state.language).format(Number(value || 0));
+}
+
+function normalizeSearchValue(raw) {
+  return normalizeInstagramUsername(raw).toLowerCase();
 }
 
 function readFilters() {
@@ -396,14 +421,18 @@ function openSelectedTargetProfile() {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
+function badgeHtml(value, tone) {
+  return `<span class="status-badge ${tone ? `is-${tone}` : ""}">${escapeHtml(value)}</span>`;
+}
+
 function renderHealth(data) {
   const entries = [
-    [t("healthDataReady"), data.db_ok ? t("statusAvailable") : t("statusUnavailable")],
-    [t("healthUpdatingNow"), data.tracker_running_guess ? t("yes") : t("no")],
-    [t("healthLastUpdate"), data.last_success_at ? formatDateTime(data.last_success_at) : t("noUpdateYet")],
+    [t("healthDataReady"), badgeHtml(data.db_ok ? t("statusAvailable") : t("statusUnavailable"), data.db_ok ? "good" : "danger")],
+    [t("healthUpdatingNow"), badgeHtml(data.tracker_running_guess ? t("yes") : t("no"), data.tracker_running_guess ? "warn" : "")],
+    [t("healthLastUpdate"), escapeHtml(data.last_success_at ? formatDateTime(data.last_success_at) : t("noUpdateYet"))],
   ];
   $("health").innerHTML = entries
-    .map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`)
+    .map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${value}</dd>`)
     .join("");
 }
 
@@ -523,18 +552,28 @@ function renderCurrent(data) {
   body.innerHTML = "";
   const filters = state.lastFilters || readFilters();
   const showTarget = !filters.target;
+  const searchValue = normalizeSearchValue($("currentSearch").value);
+  const rows = searchValue
+    ? data.rows.filter((row) => {
+        const username = normalizeSearchValue(row.username);
+        const target = normalizeSearchValue(row.target);
+        return username.includes(searchValue) || target.includes(searchValue);
+      })
+    : data.rows;
   $("currentTargetHeader").hidden = !showTarget;
-  $("currentMeta").textContent = t("currentMeta", { count: formatCount(data.rows.length) });
+  $("currentMeta").textContent = searchValue
+    ? t("currentMetaFiltered", { count: formatCount(rows.length), total: formatCount(data.rows.length) })
+    : t("currentMeta", { count: formatCount(data.rows.length) });
 
-  if (!data.rows.length) {
+  if (!rows.length) {
     const tr = document.createElement("tr");
     const colCount = showTarget ? 5 : 4;
-    tr.innerHTML = `<td colspan="${colCount}">${escapeHtml(t("emptyCurrent"))}</td>`;
+    tr.innerHTML = `<td colspan="${colCount}">${escapeHtml(searchValue ? t("emptyCurrentSearch") : t("emptyCurrent"))}</td>`;
     body.appendChild(tr);
     return;
   }
 
-  for (const row of data.rows) {
+  for (const row of rows) {
     const tr = document.createElement("tr");
     const cells = [];
     if (showTarget) {
@@ -631,9 +670,26 @@ async function onSelectDay(day) {
   }
 }
 
+function setRefreshLoading(isLoading) {
+  state.isRefreshing = isLoading;
+  const refreshButton = $("refreshBtn");
+  refreshButton.disabled = isLoading;
+  refreshButton.textContent = isLoading ? t("refreshLoading") : t("refreshBtn");
+}
+
+function updateLastRefreshMeta() {
+  $("lastRefreshMeta").textContent = state.lastRefreshedAt
+    ? t("lastRefreshed", { time: formatDateTime(state.lastRefreshedAt) })
+    : t("notRefreshed");
+}
+
 async function refreshAll() {
+  if (state.isRefreshing) {
+    return;
+  }
   const filters = readFilters();
   state.lastFilters = { ...filters };
+  setRefreshLoading(true);
   try {
     const [health, overview, daily, current] = await Promise.all([
       apiGet("/api/v1/health", { tz: filters.tz }),
@@ -661,8 +717,12 @@ async function refreshAll() {
     renderDaily(daily);
     renderCurrent(current);
     await loadDayDetails();
+    state.lastRefreshedAt = new Date().toISOString();
+    updateLastRefreshMeta();
   } catch (err) {
     showToast(t("refreshError", { message: err.message }));
+  } finally {
+    setRefreshLoading(false);
   }
 }
 
@@ -680,6 +740,11 @@ async function init() {
 $("refreshBtn").addEventListener("click", refreshAll);
 $("openTargetBtn").addEventListener("click", openSelectedTargetProfile);
 $("target").addEventListener("change", updateOpenTargetButton);
+$("currentSearch").addEventListener("input", () => {
+  if (state.data.current) {
+    renderCurrent(state.data.current);
+  }
+});
 document.querySelectorAll(".lang-btn").forEach((button) => {
   button.addEventListener("click", () => setLanguage(button.dataset.lang));
 });
