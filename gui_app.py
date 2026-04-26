@@ -7,6 +7,9 @@ import subprocess
 import importlib.util
 import csv
 import webbrowser
+import base64
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -42,6 +45,8 @@ MONITOR_ONLY = os.getenv("GUI_MONITOR_ONLY", os.getenv("TRAY_MONITOR_ONLY", "fal
 REQUIRED_ENV_KEYS = ("IG_USERNAME", "IG_PASSWORD", "TARGET_ACCOUNT")
 TRACKER_SERVICE_NAME = "IG Tracker"
 WEB_SERVICE_NAME = "IG Tracker Web"
+TRACKER_TASK_NAME = "IG Tracker"
+PENDING_BACKGROUND_FLAG = ROOT_DIR / "enable_background_after_setup.flag"
 WEB_PORT_DEFAULT = int(os.getenv("WEB_PORT", "8088"))
 WEB_HOST_DEFAULT = os.getenv("WEB_HOST", "127.0.0.1")
 
@@ -104,6 +109,36 @@ def _update_env_key(key, value):
         new_lines.append(f"{key}={value}\n")
     with open(ENV_PATH, "w", encoding="utf-8") as f:
         f.writelines(new_lines)
+    os.environ[key] = value
+
+
+def _update_env_keys(values):
+    for key, value in values.items():
+        _update_env_key(key, value)
+
+
+def _env_value(key, default=""):
+    return (os.getenv(key, default) or "").strip()
+
+
+def _is_placeholder_value(value):
+    value = (value or "").strip()
+    if not value:
+        return True
+    if value.lower().startswith("your_"):
+        return True
+    return value in {"account_to_track", "your_username", "your_password", "replace_with_random_48_byte_secret"}
+
+
+def _b64url(data):
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def _generate_password_hash(password):
+    iterations = 260000
+    salt = _b64url(secrets.token_bytes(16))
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), iterations, dklen=32)
+    return f"pbkdf2_sha256${iterations}${salt}${_b64url(digest)}"
 
 
 def _run_elevated_ps(commands):
@@ -141,6 +176,88 @@ def _tool_cmd(script_name: str, exe_name: str):
         exe_path = BIN_DIR / exe_name
         return [str(exe_path)] if exe_path.exists() else None
     return [sys.executable, "-u", script_name]
+
+
+def _tracker_task_command():
+    if IS_FROZEN:
+        exe_path = BIN_DIR / "ig-tracker-cli.exe"
+        if not exe_path.exists():
+            return None, None
+        return str(exe_path), ""
+    python = ROOT_DIR / "venv" / "Scripts" / "python.exe"
+    if not python.exists():
+        python = Path(sys.executable)
+    return str(python), f'-u "{ROOT_DIR / "main.py"}"'
+
+
+def _query_tracker_task():
+    if not sys.platform.startswith("win"):
+        return {"exists": False, "state": "unsupported", "details": "Windows only"}
+    try:
+        result = subprocess.run(
+            ["schtasks", "/Query", "/TN", TRACKER_TASK_NAME, "/FO", "LIST"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=8,
+            check=False,
+        )
+        if result.returncode != 0:
+            return {"exists": False, "state": "not_found", "details": "Not configured"}
+        state = "unknown"
+        for line in (result.stdout or "").splitlines():
+            if line.lower().startswith("status:"):
+                state = line.split(":", 1)[1].strip() or "unknown"
+                break
+        return {"exists": True, "state": state, "details": "Task Scheduler entry detected"}
+    except Exception as exc:
+        return {"exists": False, "state": "unknown", "details": f"Could not query task: {exc}"}
+
+
+def _create_or_update_tracker_task():
+    if not sys.platform.startswith("win"):
+        return False, "Background tracking automation is Windows-only."
+    execute, arguments = _tracker_task_command()
+    if not execute:
+        return False, "Could not find ig-tracker-cli.exe. Reinstall or use the source setup path."
+
+    import tempfile
+
+    script = f"""
+$ErrorActionPreference = "Stop"
+$taskName = "{TRACKER_TASK_NAME}"
+$action = New-ScheduledTaskAction -Execute "{execute}" -Argument "{arguments}" -WorkingDirectory "{ROOT_DIR}"
+$trigger = New-ScheduledTaskTrigger -AtLogOn
+$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 0)
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description "Runs IG Tracker in the background after Windows login." -Force | Out-Null
+"""
+    fd, tmp_path = tempfile.mkstemp(suffix=".ps1")
+    try:
+        os.close(fd)
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            handle.write(script)
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", tmp_path],
+            cwd=str(ROOT_DIR),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+        if result.returncode != 0:
+            message = (result.stderr or result.stdout or "Task Scheduler returned an error.").strip()
+            return False, message.splitlines()[-1][:240]
+        return True, "Background tracking task created."
+    except Exception as exc:
+        return False, str(exc)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
 
 
 def _utcnow_naive():
@@ -217,8 +334,6 @@ def _stop_tracker():
 
 
 def _run_login_only():
-    if MONITOR_ONLY:
-        return
     if _is_running():
         return
     cmd = _tool_cmd("main.py", "ig-tracker-cli.exe")
@@ -513,6 +628,12 @@ class TrackerGUI:
         self.message_var = tk.StringVar(value="")
         self.last_output = ""
         self.wizard_summary_var = tk.StringVar(value="Run checks to verify first-time setup.")
+        self.setup_user_var = tk.StringVar(value="" if _is_placeholder_value(_env_value("IG_USERNAME")) else _env_value("IG_USERNAME"))
+        self.setup_password_var = tk.StringVar(value="" if _is_placeholder_value(_env_value("IG_PASSWORD")) else _env_value("IG_PASSWORD"))
+        self.setup_target_var = tk.StringVar(value="" if _is_placeholder_value(_env_value("TARGET_ACCOUNT")) else _env_value("TARGET_ACCOUNT"))
+        self.background_status_var = tk.StringVar(value="Background tracking: checking...")
+        self.web_auth_user_var = tk.StringVar(value=_env_value("WEB_AUTH_USER", "admin") or "admin")
+        self.web_auth_password_var = tk.StringVar(value="")
         self.cookie_status_var = tk.StringVar(value="Cookie: unknown")
         self.error_status_var = tk.StringVar(value="Last error: none")
         self.stale_status_var = tk.StringVar(value="Freshness: unknown")
@@ -713,22 +834,36 @@ class TrackerGUI:
         wizard_frame = ttk.LabelFrame(parent, text="First-run wizard")
         wizard_frame.grid(row=1, column=0, sticky="ew", padx=4, pady=4)
         wizard_frame.columnconfigure(0, weight=1)
+        setup_form = ttk.Frame(wizard_frame)
+        setup_form.grid(row=0, column=0, sticky="ew", padx=6, pady=(6, 2))
+        setup_form.columnconfigure(1, weight=1)
+        setup_form.columnconfigure(3, weight=1)
+        ttk.Label(setup_form, text="Instagram username").grid(row=0, column=0, sticky="w", padx=4, pady=3)
+        ttk.Entry(setup_form, textvariable=self.setup_user_var, width=26).grid(row=0, column=1, sticky="ew", padx=4, pady=3)
+        ttk.Label(setup_form, text="Instagram password").grid(row=0, column=2, sticky="w", padx=4, pady=3)
+        ttk.Entry(setup_form, textvariable=self.setup_password_var, show="*", width=26).grid(row=0, column=3, sticky="ew", padx=4, pady=3)
+        ttk.Label(setup_form, text="Account to track").grid(row=1, column=0, sticky="w", padx=4, pady=3)
+        ttk.Entry(setup_form, textvariable=self.setup_target_var, width=26).grid(row=1, column=1, sticky="ew", padx=4, pady=3)
+        ttk.Button(setup_form, text="Save account settings", command=self._save_setup_config).grid(row=1, column=2, columnspan=2, sticky="w", padx=4, pady=3)
+
         wizard_controls = ttk.Frame(wizard_frame)
-        wizard_controls.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 2))
+        wizard_controls.grid(row=1, column=0, sticky="ew", padx=4, pady=(4, 2))
         self._build_form_row(
             wizard_controls,
             0,
             [
-                ttk.Button(wizard_controls, text="Run setup checks", command=self._run_wizard_checks),
-                ttk.Button(wizard_controls, text="Open .env", command=self._open_env_file),
+                ttk.Button(wizard_controls, text="Save settings", command=self._save_setup_config),
                 ttk.Button(wizard_controls, text="Run login-only now", command=self._login_only_clicked),
+                ttk.Button(wizard_controls, text="Run setup checks", command=self._run_wizard_checks),
+                ttk.Button(wizard_controls, text="Enable background tracking", command=self._enable_background_tracking_clicked),
             ],
-            max_cols=3,
+            max_cols=4,
         )
-        ttk.Label(wizard_frame, textvariable=self.wizard_summary_var).grid(row=1, column=0, sticky="w", padx=8, pady=(0, 4))
+        ttk.Label(wizard_frame, textvariable=self.background_status_var, foreground="#444").grid(row=2, column=0, sticky="w", padx=8, pady=(0, 2))
+        ttk.Label(wizard_frame, textvariable=self.wizard_summary_var).grid(row=3, column=0, sticky="w", padx=8, pady=(0, 4))
 
         wizard_table = ttk.Frame(wizard_frame)
-        wizard_table.grid(row=2, column=0, sticky="nsew", padx=6, pady=(0, 6))
+        wizard_table.grid(row=4, column=0, sticky="nsew", padx=6, pady=(0, 6))
         wizard_table.columnconfigure(0, weight=1)
         wizard_table.rowconfigure(0, weight=1)
         self.wizard_tree = ttk.Treeview(
@@ -748,11 +883,21 @@ class TrackerGUI:
         self.wizard_tree.grid(row=0, column=0, sticky="nsew")
         wizard_scroll.grid(row=0, column=1, sticky="ns")
 
+        web_auth_frame = ttk.LabelFrame(parent, text="Web dashboard auth (optional)")
+        web_auth_frame.grid(row=2, column=0, sticky="ew", padx=4, pady=4)
+        web_auth_frame.columnconfigure(1, weight=1)
+        web_auth_frame.columnconfigure(3, weight=1)
+        ttk.Label(web_auth_frame, text="Web username").grid(row=0, column=0, sticky="w", padx=6, pady=5)
+        ttk.Entry(web_auth_frame, textvariable=self.web_auth_user_var, width=22).grid(row=0, column=1, sticky="ew", padx=4, pady=5)
+        ttk.Label(web_auth_frame, text="Web password").grid(row=0, column=2, sticky="w", padx=6, pady=5)
+        ttk.Entry(web_auth_frame, textvariable=self.web_auth_password_var, show="*", width=22).grid(row=0, column=3, sticky="ew", padx=4, pady=5)
+        ttk.Button(web_auth_frame, text="Generate web auth", command=self._generate_web_auth_clicked).grid(row=0, column=4, sticky="w", padx=6, pady=5)
+
         self._build_services_section(parent)
 
     def _build_services_section(self, parent):
         svc_frame = ttk.LabelFrame(parent, text="Windows Services (run at boot, no login needed)")
-        svc_frame.grid(row=2, column=0, sticky="ew", padx=4, pady=4)
+        svc_frame.grid(row=3, column=0, sticky="ew", padx=4, pady=4)
         svc_frame.columnconfigure(1, weight=1)
 
         nssm_row = ttk.Frame(svc_frame)
@@ -1319,7 +1464,7 @@ class TrackerGUI:
         state = "disabled" if self._is_monitor_mode() else "normal"
         self.start_btn.configure(state=state)
         self.stop_btn.configure(state=state)
-        self.login_btn.configure(state=state)
+        self.login_btn.configure(state="normal")
 
     def _cookie_health_text(self):
         cookie_file = ROOT_DIR / "instagram_cookies.json"
@@ -1406,15 +1551,137 @@ class TrackerGUI:
     def _open_env_file(self):
         _open_path(ENV_PATH)
 
+    def _save_setup_config(self):
+        username = self.setup_user_var.get().strip()
+        password = self.setup_password_var.get().strip()
+        target = self.setup_target_var.get().strip().lstrip("@")
+        missing = []
+        if _is_placeholder_value(username):
+            missing.append("Instagram username")
+        if _is_placeholder_value(password):
+            missing.append("Instagram password")
+        if _is_placeholder_value(target):
+            missing.append("account to track")
+        if missing:
+            self._set_message("Enter " + ", ".join(missing) + " before saving.")
+            return
+        _update_env_keys(
+            {
+                "IG_USERNAME": username,
+                "IG_PASSWORD": password,
+                "TARGET_ACCOUNT": target,
+                "HEADLESS_MODE": "true",
+                "LOGIN_ONLY_MODE": "false",
+            }
+        )
+        self.setup_target_var.set(target)
+        self._set_message("Account settings saved.")
+        self._run_wizard_checks()
+
+    def _generate_web_auth_clicked(self):
+        username = self.web_auth_user_var.get().strip() or "admin"
+        password = self.web_auth_password_var.get().strip()
+        if len(password) < 8:
+            self._set_message("Enter a web dashboard password with at least 8 characters.")
+            return
+        _update_env_keys(
+            {
+                "WEB_ENABLED": "false",
+                "WEB_HOST": "127.0.0.1",
+                "WEB_AUTH_MODE": "session",
+                "WEB_AUTH_USER": username,
+                "WEB_AUTH_PASSWORD_HASH": _generate_password_hash(password),
+                "WEB_SESSION_SECRET": _b64url(secrets.token_bytes(48)),
+            }
+        )
+        self.web_auth_password_var.set("")
+        self._set_message("Web dashboard auth generated. Web access remains local/disabled until enabled.")
+        self._run_wizard_checks()
+
     def _env_value_configured(self, key):
-        value = (os.getenv(key, "") or "").strip()
-        if not value:
-            return False
-        if value.lower().startswith("your_"):
-            return False
-        if value in {"account_to_track", "your_username", "your_password"}:
-            return False
-        return True
+        return not _is_placeholder_value(os.getenv(key, ""))
+
+    def _runtime_available(self):
+        cmd = _tool_cmd("main.py", "ig-tracker-cli.exe")
+        if cmd:
+            return True, "Tracker executable/runtime found"
+        return False, "Missing ig-tracker-cli.exe next to GUI"
+
+    def _data_folder_writable(self):
+        probe = ROOT_DIR / ".ig_tracker_write_test"
+        try:
+            ROOT_DIR.mkdir(parents=True, exist_ok=True)
+            with open(probe, "w", encoding="utf-8") as handle:
+                handle.write("ok")
+            probe.unlink()
+            return True, str(ROOT_DIR)
+        except Exception as exc:
+            try:
+                if probe.exists():
+                    probe.unlink()
+            except Exception:
+                pass
+            return False, str(exc)
+
+    def _update_background_status(self):
+        task = _query_tracker_task()
+        if task["exists"]:
+            self.background_status_var.set(f"Background tracking: configured ({task['state']})")
+        elif PENDING_BACKGROUND_FLAG.exists():
+            self.background_status_var.set("Background tracking: ready to enable after setup checks pass")
+        else:
+            self.background_status_var.set(f"Background tracking: {task['details']}")
+        return task
+
+    def _required_setup_passes(self):
+        cookie_path = ROOT_DIR / "instagram_cookies.json"
+        return (
+            ENV_PATH.exists()
+            and all(self._env_value_configured(key) for key in REQUIRED_ENV_KEYS)
+            and cookie_path.exists()
+            and cookie_path.stat().st_size > 10
+            and self._runtime_available()[0]
+            and self._data_folder_writable()[0]
+        )
+
+    def _enable_background_tracking_clicked(self):
+        self._save_setup_config()
+        if not self._required_setup_passes():
+            self._set_message("Finish required setup checks and login-only before enabling background tracking.")
+            return
+        self._set_message("Creating Windows background task...")
+
+        def _worker():
+            ok, message = _create_or_update_tracker_task()
+
+            def _done():
+                if ok:
+                    _update_env_keys(
+                        {
+                            "GUI_SETUP_COMPLETE": "true",
+                            "BACKGROUND_TRACKING_ENABLED": "true",
+                            "GUI_MONITOR_ONLY": "true",
+                            "TRAY_MONITOR_ONLY": "true",
+                            "GUI_AUTO_START": "false",
+                            "TRAY_AUTO_START": "false",
+                        }
+                    )
+                    self.session_monitor_only.set(True)
+                    self._apply_control_mode()
+                    try:
+                        if PENDING_BACKGROUND_FLAG.exists():
+                            PENDING_BACKGROUND_FLAG.unlink()
+                    except Exception:
+                        pass
+                    self._set_message("Background tracking enabled. GUI is now monitor-only.")
+                else:
+                    self._set_message(f"Could not enable background tracking: {message}")
+                self._update_background_status()
+                self._run_wizard_checks()
+
+            self.root.after(0, _done)
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _run_wizard_checks(self):
         checks = []
@@ -1432,6 +1699,12 @@ class TrackerGUI:
         has_wdm = importlib.util.find_spec("webdriver_manager") is not None
         dep_ok = has_selenium and has_wdm
         checks.append(("Dependencies", "PASS" if dep_ok else "FAIL", "selenium + webdriver_manager"))
+
+        runtime_ok, runtime_note = self._runtime_available()
+        checks.append(("Tracker runtime", "PASS" if runtime_ok else "FAIL", runtime_note))
+
+        data_ok, data_note = self._data_folder_writable()
+        checks.append(("Data folder", "PASS" if data_ok else "FAIL", data_note))
 
         cookie_path = ROOT_DIR / "instagram_cookies.json"
         cookie_ok = cookie_path.exists() and cookie_path.stat().st_size > 10
@@ -1466,29 +1739,10 @@ class TrackerGUI:
                 pass
         checks.append(("Database", "PASS" if db_exists else "WARN", f"{DB_PATH} | runs: {run_count}"))
 
-        task_detected = False
-        task_note = "Not detected"
-        if sys.platform.startswith("win"):
-            try:
-                result = subprocess.run(
-                    ["schtasks", "/Query", "/FO", "CSV", "/NH"],
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=8,
-                )
-                text = (result.stdout or "").lower()
-                if (
-                    "main.py" in text
-                    or "ig-tracker-cli.exe" in text
-                    or "ig-followers-and-following" in text
-                ):
-                    task_detected = True
-                    task_note = "Task Scheduler entry detected"
-            except Exception:
-                task_note = "Could not query Task Scheduler"
-        checks.append(("Scheduler", "PASS" if task_detected else "WARN", task_note))
+        task = self._update_background_status()
+        task_detected = task["exists"]
+        task_note = task["details"]
+        checks.append(("Background task", "PASS" if task_detected else "WARN", task_note))
 
         if task_detected and not MONITOR_ONLY:
             checks.append(("Monitor-only mode", "WARN", "Set GUI_MONITOR_ONLY=true to avoid double runs"))
@@ -1498,6 +1752,11 @@ class TrackerGUI:
                 self._auto_mode_applied = True
         else:
             checks.append(("Monitor-only mode", "PASS", "Current mode is safe"))
+
+        if os.getenv("BACKGROUND_TRACKING_ENABLED", "false").lower() == "true" and task_detected:
+            checks.append(("Setup complete", "PASS", "Background tracking is configured"))
+        else:
+            checks.append(("Setup complete", "WARN", "Enable background tracking after login-only succeeds"))
 
         self._render_wizard_checks(checks)
 
@@ -1751,9 +2010,6 @@ class TrackerGUI:
         self._set_message("Tracker stopped.")
 
     def _login_only_clicked(self):
-        if self._is_monitor_mode():
-            self._set_message("Monitor-only mode enabled; tracker controls are disabled.")
-            return
         _run_login_only()
         self._set_message("Login-only started (visible browser).")
 

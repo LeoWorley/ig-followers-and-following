@@ -13,6 +13,32 @@
   - `SCRAPE_STALL_TIMEOUT_SECONDS`
   - `SCRAPE_MAX_ITERATIONS`
 
+## Source setup
+
+Windows:
+```powershell
+.\setup.ps1
+.\start_gui.ps1
+```
+
+macOS/Linux:
+```bash
+./setup.sh
+./start_gui.sh
+```
+
+For first-time login from source, use the GUI `Run login-only now` button or run the platform `login_once` script.
+
+## Advanced Windows services
+
+The default installer flow uses a per-user Task Scheduler entry named `IG Tracker`.
+
+Use the GUI `Windows Services` section only if you need a machine-level service that runs without user login. That path requires `nssm.exe` and a Windows administrator prompt.
+
+## Remote web access
+
+The web dashboard defaults to disabled/local-only for new installs. Generate web auth from the GUI, then review `docs/MOBILE_DASHBOARD.md`, `docs/CADDY_DUCKDNS.md`, and `docs/OPERATIONS.md` before exposing it beyond the local machine or tailnet.
+
 ## DB maintenance
 
 - Optional runtime maintenance:

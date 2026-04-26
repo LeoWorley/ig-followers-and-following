@@ -32,25 +32,21 @@ Use this path if you want to install and run the app without Python/venv.
    - `ig-tracker-setup-vX.Y.Z.exe`
 2. Run installer and complete wizard.
    - Default install path: `%LOCALAPPDATA%\Programs\IG Tracker`
-   - Optional task in installer: "Run tray app at Windows startup"
+   - Recommended installer task: "Offer background tracking setup after first login"
+   - Optional tray task: "Run tray monitor at Windows startup"
 3. Open Start Menu:
    - `IG Tracker GUI`
-4. In the GUI wizard, click "Open .env", set real values, and save:
-```env
-IG_USERNAME=your_username
-IG_PASSWORD=your_password
-TARGET_ACCOUNT=account_to_track
-```
-5. In GUI, click `Run login-only now`, complete IG login/2FA in browser, wait until cookie is saved.
-6. Click `Run setup checks` and confirm cookie/deps/db checks are healthy.
-7. Choose how to run day-to-day:
-   - GUI-managed run: keep GUI open and use `Start tracker`.
-   - Background run (recommended): create a Task Scheduler task:
-     - Program/script: `%LOCALAPPDATA%\Programs\IG Tracker\ig-tracker-cli.exe`
-     - Start in: `%LOCALAPPDATA%\Programs\IG Tracker`
-     - Trigger: At startup
-     - If already running: `Do not start a new instance`
-8. Optional monitor app:
+4. In the GUI wizard, enter:
+   - Instagram username
+   - Instagram password
+   - Account to track
+5. Click `Save account settings`.
+6. Click `Run login-only now`, complete IG login/2FA in browser, wait until cookie is saved.
+7. Click `Run setup checks` and confirm required checks are healthy.
+8. Click `Enable background tracking`.
+   - The GUI creates a per-user Windows Task Scheduler entry named `IG Tracker`.
+   - GUI/tray switch to monitor-only mode after background tracking is enabled.
+9. Optional monitor app:
    - Start Menu -> `IG Tracker Tray`
 
 If IG password/session changes later, run `Run login-only now` again to refresh cookies.

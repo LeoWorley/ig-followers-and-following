@@ -24,7 +24,8 @@ ArchitecturesInstallIn64BitMode=x64
 UninstallDisplayIcon={app}\ig-tracker-gui.exe
 
 [Tasks]
-Name: "traystartup"; Description: "Run tray app at Windows startup"; GroupDescription: "Startup options:"
+Name: "bgtracking"; Description: "Offer background tracking setup after first login"; GroupDescription: "Setup options:"; Flags: checkedonce
+Name: "traystartup"; Description: "Run tray monitor at Windows startup"; GroupDescription: "Setup options:"
 
 [Files]
 Source: "{#SourceDir}\ig-tracker-gui.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -49,4 +50,5 @@ Name: "{group}\README"; Filename: "{app}\README.md"
 Name: "{userstartup}\IG Tracker Tray"; Filename: "{app}\ig-tracker-tray.exe"; Tasks: traystartup
 
 [Run]
+Filename: "{cmd}"; Parameters: "/c type nul > ""{app}\enable_background_after_setup.flag"""; Tasks: bgtracking; Flags: runhidden
 Filename: "{app}\ig-tracker-gui.exe"; Description: "Launch IG Tracker GUI"; Flags: nowait postinstall skipifsilent
