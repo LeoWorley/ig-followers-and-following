@@ -343,6 +343,10 @@ async function apiGet(path, params = {}) {
   });
   const res = await fetch(url.toString());
   if (!res.ok) {
+    if (res.status === 401) {
+      window.location.assign("/login");
+      throw new Error("Login required");
+    }
     let msg = `HTTP ${res.status}`;
     try {
       const data = await res.json();

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Login - IG Tracker</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <main class="login-shell">
+      <section class="panel login-panel">
+        <p class="eyebrow">Private dashboard</p>
+        <h1>IG Tracker</h1>
+        <form class="login-form" action="/login" method="post" autocomplete="on">
+          <div class="field">
+            <label for="username">Username</label>
+            <input id="username" name="username" type="text" value="{{ username }}" autocomplete="username" required autofocus>
+          </div>
+          <div class="field">
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required>
+          </div>
+          {% if error %}
+          <p class="auth-error">{{ error }}</p>
+          {% endif %}
+          <button class="btn" type="submit">Login</button>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

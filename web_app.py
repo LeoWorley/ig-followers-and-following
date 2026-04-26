@@ -1,15 +1,20 @@
 import os
 import secrets
 import sqlite3
+import base64
+import hashlib
+import hmac
+import json
+import time
 from datetime import date, datetime, time as dt_time, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qs
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import pytz
@@ -22,16 +27,24 @@ load_dotenv(ROOT_DIR / ".env")
 WEB_ENABLED = os.getenv("WEB_ENABLED", "true").lower() == "true"
 WEB_DB_PATH = Path(os.getenv("WEB_DB_PATH") or (ROOT_DIR / "instagram_tracker.db"))
 WEB_TZ = os.getenv("WEB_TZ", "America/Hermosillo")
+WEB_AUTH_MODE = os.getenv("WEB_AUTH_MODE", "session").strip().lower()
 WEB_AUTH_USER = os.getenv("WEB_AUTH_USER", "admin")
-WEB_AUTH_PASS = os.getenv("WEB_AUTH_PASS", "change_this_now")
+WEB_AUTH_PASS = os.getenv("WEB_AUTH_PASS")
+WEB_AUTH_PASSWORD_HASH = os.getenv("WEB_AUTH_PASSWORD_HASH", "")
+WEB_SESSION_SECRET = os.getenv("WEB_SESSION_SECRET", "")
+WEB_SESSION_COOKIE_NAME = os.getenv("WEB_SESSION_COOKIE_NAME", "ig_tracker_session")
+WEB_SESSION_COOKIE_SECURE = os.getenv("WEB_SESSION_COOKIE_SECURE", "false").lower() == "true"
+WEB_SESSION_TTL_SECONDS = int(os.getenv("WEB_SESSION_TTL_SECONDS", "43200"))
+WEB_LOGIN_RATE_LIMIT_ATTEMPTS = int(os.getenv("WEB_LOGIN_RATE_LIMIT_ATTEMPTS", "5"))
+WEB_LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("WEB_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "300"))
 LOCK_FILE = Path(os.getenv("LOCK_FILE", "tracker.lock"))
 if not LOCK_FILE.is_absolute():
     LOCK_FILE = ROOT_DIR / LOCK_FILE
 
-security = HTTPBasic()
 app = FastAPI(title="IG Tracker Web", version="0.2.0")
 VALID_TYPES = {"followers", "followings", "both"}
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
+_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 
 if (WEB_DIR / "static").exists():
     app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
@@ -57,16 +70,110 @@ def _normalize_type(list_type: str) -> str:
     return value
 
 
-def _auth(credentials: HTTPBasicCredentials = Depends(security)):
-    username_ok = secrets.compare_digest(credentials.username, WEB_AUTH_USER)
-    password_ok = secrets.compare_digest(credentials.password, WEB_AUTH_PASS)
-    if not (username_ok and password_ok):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-    return credentials.username
+def _b64_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _b64_decode(raw: str) -> bytes:
+    padding = "=" * (-len(raw) % 4)
+    return base64.urlsafe_b64decode(raw + padding)
+
+
+def _verify_password_hash(password: str, stored_hash: str) -> bool:
+    try:
+        algorithm, iterations_raw, salt, digest = stored_hash.split("$", 3)
+        iterations = int(iterations_raw)
+    except ValueError:
+        return False
+    if algorithm != "pbkdf2_sha256" or iterations < 100000:
+        return False
+    candidate = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), iterations)
+    return secrets.compare_digest(_b64_encode(candidate), digest)
+
+
+def _password_ok(password: str) -> bool:
+    if WEB_AUTH_PASSWORD_HASH:
+        return _verify_password_hash(password, WEB_AUTH_PASSWORD_HASH)
+    if WEB_AUTH_PASS:
+        return secrets.compare_digest(password, WEB_AUTH_PASS)
+    return False
+
+
+def _session_secret() -> bytes:
+    if WEB_SESSION_SECRET:
+        return WEB_SESSION_SECRET.encode("utf-8")
+    fallback = f"{WEB_AUTH_USER}:{WEB_AUTH_PASSWORD_HASH or WEB_AUTH_PASS or 'change_this_now'}"
+    return fallback.encode("utf-8")
+
+
+def _sign_payload(payload: str) -> str:
+    signature = hmac.new(_session_secret(), payload.encode("ascii"), hashlib.sha256).digest()
+    return _b64_encode(signature)
+
+
+def _create_session_cookie(username: str) -> str:
+    now = int(time.time())
+    payload = _b64_encode(
+        json.dumps(
+            {
+                "u": username,
+                "iat": now,
+                "exp": now + WEB_SESSION_TTL_SECONDS,
+                "nonce": secrets.token_urlsafe(12),
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    return f"{payload}.{_sign_payload(payload)}"
+
+
+def _read_session_cookie(request: Request) -> Optional[str]:
+    raw = request.cookies.get(WEB_SESSION_COOKIE_NAME)
+    if not raw or "." not in raw:
+        return None
+    payload, signature = raw.rsplit(".", 1)
+    if not secrets.compare_digest(_sign_payload(payload), signature):
+        return None
+    try:
+        data = json.loads(_b64_decode(payload))
+    except Exception:
+        return None
+    if int(data.get("exp", 0)) < int(time.time()):
+        return None
+    username = str(data.get("u", ""))
+    if not secrets.compare_digest(username, WEB_AUTH_USER):
+        return None
+    return username
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+    if forwarded:
+        return forwarded
+    return request.client.host if request.client else "unknown"
+
+
+def _rate_limited(ip_address: str) -> bool:
+    now = time.time()
+    window_start = now - WEB_LOGIN_RATE_LIMIT_WINDOW_SECONDS
+    attempts = [ts for ts in _LOGIN_ATTEMPTS.get(ip_address, []) if ts >= window_start]
+    _LOGIN_ATTEMPTS[ip_address] = attempts
+    return len(attempts) >= WEB_LOGIN_RATE_LIMIT_ATTEMPTS
+
+
+def _record_failed_login(ip_address: str):
+    _LOGIN_ATTEMPTS.setdefault(ip_address, []).append(time.time())
+
+
+def _clear_failed_logins(ip_address: str):
+    _LOGIN_ATTEMPTS.pop(ip_address, None)
+
+
+def _require_api_user(request: Request):
+    username = _read_session_cookie(request)
+    if username:
+        return username
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Login required")
 
 
 def _ensure_enabled():
@@ -120,11 +227,66 @@ def _ensure_iso_date(day_str: str) -> date:
         raise HTTPException(status_code=400, detail=f"Invalid date: {day_str} (expected YYYY-MM-DD)") from exc
 
 
+@app.get("/login", response_class=HTMLResponse)
+def login_form(request: Request):
+    if _read_session_cookie(request):
+        return RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
+    return templates.TemplateResponse(request, "login.html", {"error": None, "username": WEB_AUTH_USER})
+
+
+@app.post("/login", response_class=HTMLResponse)
+async def login(request: Request):
+    ip_address = _client_ip(request)
+    if _rate_limited(ip_address):
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"error": "Too many failed attempts. Try again in a few minutes.", "username": WEB_AUTH_USER},
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    body = (await request.body()).decode("utf-8")
+    form = parse_qs(body, keep_blank_values=True)
+    username = form.get("username", [""])[0].strip()
+    password = form.get("password", [""])[0]
+
+    if not secrets.compare_digest(username, WEB_AUTH_USER) or not _password_ok(password):
+        _record_failed_login(ip_address)
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"error": "Invalid username or password.", "username": username or WEB_AUTH_USER},
+            status_code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    _clear_failed_logins(ip_address)
+    response = RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
+    response.set_cookie(
+        WEB_SESSION_COOKIE_NAME,
+        _create_session_cookie(username),
+        max_age=WEB_SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=WEB_SESSION_COOKIE_SECURE,
+        samesite="lax",
+    )
+    return response
+
+
+@app.post("/logout")
+def logout():
+    response = RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
+    response.delete_cookie(WEB_SESSION_COOKIE_NAME, secure=WEB_SESSION_COOKIE_SECURE, samesite="lax")
+    return response
+
+
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request, _enabled: None = Depends(_ensure_enabled), _user: str = Depends(_auth)):
+def index(request: Request, _enabled: None = Depends(_ensure_enabled)):
+    if not _read_session_cookie(request):
+        return RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
     return templates.TemplateResponse(
+        request,
         "index.html",
-        {"request": request, "default_tz": WEB_TZ},
+        {"default_tz": WEB_TZ},
     )
 
 
@@ -132,7 +294,7 @@ def index(request: Request, _enabled: None = Depends(_ensure_enabled), _user: st
 def api_health(
     tz: Optional[str] = Query(default=None),
     _enabled: None = Depends(_ensure_enabled),
-    _user: str = Depends(_auth),
+    _user: str = Depends(_require_api_user),
 ):
     tzinfo = _resolve_tz(tz)
     result = {
@@ -188,7 +350,7 @@ def api_health(
 def api_targets(
     tz: Optional[str] = Query(default=None),
     _enabled: None = Depends(_ensure_enabled),
-    _user: str = Depends(_auth),
+    _user: str = Depends(_require_api_user),
 ):
     tzinfo = _resolve_tz(tz)
     with _open_db() as conn:
@@ -201,7 +363,7 @@ def api_overview(
     target: str = Query(default=""),
     tz: Optional[str] = Query(default=None),
     _enabled: None = Depends(_ensure_enabled),
-    _user: str = Depends(_auth),
+    _user: str = Depends(_require_api_user),
 ):
     tzinfo = _resolve_tz(tz)
     target = target.strip()
@@ -269,7 +431,7 @@ def api_daily(
     type: str = Query(default="both"),
     tz: Optional[str] = Query(default=None),
     _enabled: None = Depends(_ensure_enabled),
-    _user: str = Depends(_auth),
+    _user: str = Depends(_require_api_user),
 ):
     tzinfo = _resolve_tz(tz)
     target = target.strip()
@@ -372,7 +534,7 @@ def api_day(
     type: str = Query(default="both"),
     tz: Optional[str] = Query(default=None),
     _enabled: None = Depends(_ensure_enabled),
-    _user: str = Depends(_auth),
+    _user: str = Depends(_require_api_user),
 ):
     tzinfo = _resolve_tz(tz)
     target = target.strip()
@@ -456,7 +618,7 @@ def api_current(
     limit: int = Query(default=5000, ge=1, le=20000),
     tz: Optional[str] = Query(default=None),
     _enabled: None = Depends(_ensure_enabled),
-    _user: str = Depends(_auth),
+    _user: str = Depends(_require_api_user),
 ):
     tzinfo = _resolve_tz(tz)
     target = target.strip()

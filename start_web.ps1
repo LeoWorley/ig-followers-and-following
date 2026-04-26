@@ -22,4 +22,4 @@ if (Test-Path $envPath) {
 $hostValue = if ($env:WEB_HOST) { $env:WEB_HOST } else { "0.0.0.0" }
 $portValue = if ($env:WEB_PORT) { $env:WEB_PORT } else { "8088" }
 
-Start-Process -FilePath $python -ArgumentList "-m uvicorn web_app:app --host $hostValue --port $portValue" -WorkingDirectory $root
+Start-Process -FilePath $python -ArgumentList "-m uvicorn web_app:app --host $hostValue --port $portValue --proxy-headers --forwarded-allow-ips=127.0.0.1" -WorkingDirectory $root

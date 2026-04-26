@@ -16,6 +16,7 @@ Track changes in followers and following over time, store history in SQLite, and
 - `docs/TROUBLESHOOTING.md` - common issues and fixes.
 - `docs/ADVANCED.md` - runtime tuning, db tools, packaging.
 - `docs/MOBILE_DASHBOARD.md` - mobile web dashboard via Tailscale.
+- `docs/CADDY_DUCKDNS.md` - DuckDNS HTTPS access for Jellyfin and the web dashboard.
 - `docs/OPERATIONS.md` - local operations runbook.
 - `docs/ARCHITECTURE.md` - system architecture and boundaries.
 - `docs/CLOUD_MIGRATION.md` - migration path from local to cloud.

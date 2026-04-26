@@ -19,4 +19,4 @@ fi
 WEB_HOST="${WEB_HOST:-0.0.0.0}"
 WEB_PORT="${WEB_PORT:-8088}"
 
-exec "$PYTHON" -m uvicorn web_app:app --host "$WEB_HOST" --port "$WEB_PORT"
+exec "$PYTHON" -m uvicorn web_app:app --host "$WEB_HOST" --port "$WEB_PORT" --proxy-headers --forwarded-allow-ips=127.0.0.1

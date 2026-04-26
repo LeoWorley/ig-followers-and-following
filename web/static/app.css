@@ -107,6 +107,10 @@ body {
   background: rgba(8, 28, 39, 0.78);
 }
 
+.logout-form {
+  margin: 0;
+}
+
 .lang-btn {
   border: 0;
   border-radius: 999px;
@@ -218,6 +222,40 @@ select,
   background: transparent;
   border: 1px solid rgba(170, 215, 231, 0.45);
   color: var(--text);
+}
+
+.btn-compact {
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+
+.login-shell {
+  min-height: 100vh;
+  width: min(100%, 420px);
+  margin: 0 auto;
+  padding: 28px 16px;
+  display: grid;
+  align-content: center;
+}
+
+.login-panel h1 {
+  margin: 4px 0 18px;
+  font-size: 1.8rem;
+}
+
+.login-form {
+  display: grid;
+  gap: 12px;
+}
+
+.auth-error {
+  margin: 0;
+  color: #ffd2cf;
+  background: rgba(255, 106, 95, 0.16);
+  border: 1px solid rgba(255, 106, 95, 0.45);
+  border-radius: 10px;
+  padding: 9px 10px;
+  overflow-wrap: anywhere;
 }
 
 .grid {

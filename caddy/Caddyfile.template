@@ -1,0 +1,11 @@
+{
+	http_port 8080
+}
+
+JELLYFIN_DUCKDNS_NAME.duckdns.org {
+	reverse_proxy 127.0.0.1:8096
+}
+
+IG_DUCKDNS_NAME.duckdns.org {
+	reverse_proxy 127.0.0.1:8088
+}

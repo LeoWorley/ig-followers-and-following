@@ -46,6 +46,12 @@ release/
 # windsurf rules
 .windsurfrules
 
+# local agent/tool settings
+.claude/
+
+# local Windows service helper binary
+nssm.exe
+
 # tooling caches
 .pytest_cache/
 .ruff_cache/
