@@ -136,6 +136,61 @@ def _vacuum_db(db_path="instagram_tracker.db"):
         conn.close()
 
 
+def _send_ntfy_activity(changes):
+    if not changes:
+        return
+    ntfy_url = os.getenv("NTFY_URL", "").strip()
+    if not ntfy_url:
+        return
+    if os.getenv("NTFY_CHANGES_ENABLED", "true").lower() != "true":
+        return
+
+    new_f = changes.get("new_followers", [])
+    lost_f = changes.get("lost_followers", [])
+    new_ing = changes.get("new_followings", [])
+    lost_ing = changes.get("lost_followings", [])
+
+    if not any([new_f, lost_f, new_ing, lost_ing]):
+        return
+
+    def _fmt(label, names):
+        if not names:
+            return ""
+        preview = ", ".join(f"@{n}" for n in names[:5])
+        extra = f" (+{len(names) - 5} more)" if len(names) > 5 else ""
+        return f"{label}: {preview}{extra}"
+
+    parts = [p for p in [_fmt("New followers", new_f), _fmt("Unfollowers", lost_f),
+                          _fmt("New following", new_ing), _fmt("Unfollowed", lost_ing)] if p]
+
+    title_parts = []
+    if new_f:
+        title_parts.append(f"{len(new_f)} new follower{'s' if len(new_f) != 1 else ''}")
+    if lost_f:
+        title_parts.append(f"{len(lost_f)} unfollower{'s' if len(lost_f) != 1 else ''}")
+    if new_ing:
+        title_parts.append(f"{len(new_ing)} new following{'s' if len(new_ing) != 1 else ''}")
+    if lost_ing:
+        title_parts.append(f"{len(lost_ing)} unfollowed")
+
+    title = "IG: " + ", ".join(title_parts)
+    message = "\n".join(parts)
+
+    token = os.getenv("NTFY_TOKEN", "").strip()
+    headers = {"Title": title, "Priority": "3", "Content-Type": "text/plain"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        from urllib import request as _req
+        req = _req.Request(ntfy_url, data=message.encode("utf-8"), headers=headers, method="POST")
+        with _req.urlopen(req, timeout=10) as resp:
+            resp.read()
+        logging.info("ntfy activity notification sent: %s", title)
+    except Exception:
+        logging.exception("ntfy activity notification failed")
+
+
 class SingleInstanceLock:
     def __init__(self, lock_path):
         self.lock_path = lock_path
@@ -672,6 +727,7 @@ class InstagramTracker:
             result["status"] = "success"
             result["followers_collected"] = followers_collected
             result["followings_collected"] = followings_collected
+            result["changes"] = self.db.get_changes_for_run(target.id, run_started_at)
         except Exception as e:
             print(f"Error in run: {str(e)}")
             result["error"] = str(e)
@@ -808,16 +864,36 @@ def main():
                 if stop_on_auth_failure:
                     print("STOP_ON_AUTH_FAILURE is enabled. Exiting loop after authentication failure.")
                     break
-        elif os.getenv("ALERT_ON_SUCCESS", "false").lower() == "true":
-            send_alert(
-                "tracker_run_success",
-                "Instagram tracker run succeeded",
-                (
-                    f"Followers processed: {run_result.get('followers_collected', 0)}, "
-                    f"followings processed: {run_result.get('followings_collected', 0)}"
-                ),
-                level="info",
-            )
+        else:
+            if os.getenv("ALERT_ON_SUCCESS", "false").lower() == "true":
+                send_alert(
+                    "tracker_run_success",
+                    "Instagram tracker run succeeded",
+                    (
+                        f"Followers processed: {run_result.get('followers_collected', 0)}, "
+                        f"followings processed: {run_result.get('followings_collected', 0)}"
+                    ),
+                    level="info",
+                )
+            _send_ntfy_activity(run_result.get("changes", {}))
+        try:
+            cookie_stale_hours = float(os.getenv("COOKIE_STALE_HOURS", "0"))
+        except ValueError:
+            cookie_stale_hours = 0.0
+        if cookie_stale_hours > 0:
+            cookie_path = "instagram_cookies.json"
+            if os.path.exists(cookie_path):
+                age_h = (time.time() - os.path.getmtime(cookie_path)) / 3600.0
+                if age_h >= cookie_stale_hours:
+                    send_alert(
+                        "cookie_stale",
+                        "Instagram tracker cookie aging",
+                        (
+                            f"Cookie file is {age_h:.1f}h old (threshold {cookie_stale_hours:.0f}h). "
+                            "Run login-only mode soon to refresh the session."
+                        ),
+                        level="warning",
+                    )
         if stale_success_hours > 0:
             age_hours, last_success = _last_success_age_hours()
             if age_hours is not None and age_hours >= stale_success_hours:

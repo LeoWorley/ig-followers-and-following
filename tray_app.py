@@ -591,6 +591,59 @@ def _menu():
     )
 
 
+def _boot_summary():
+    """Compose a one-line health summary for the boot toast."""
+    last_run = _read_last_run()
+    cookie = _cookie_status()
+    web = "web:up" if _check_web_port() else "web:down"
+    warn = False
+
+    if last_run:
+        status = last_run.get("status") or "unknown"
+        when = _format_dt(last_run.get("finished_at") or last_run.get("started_at"))
+        run_part = f"last run: {status} @ {when}"
+        if status != "success":
+            warn = True
+    else:
+        run_part = "last run: none yet"
+        warn = True
+
+    if "missing" in cookie:
+        warn = True
+    elif cookie.endswith("d"):
+        try:
+            if float(cookie.split(":")[1][:-1]) >= 1.0:
+                warn = True
+        except (ValueError, IndexError):
+            pass
+
+    prefix = "WARN" if warn else "OK"
+    body = f"{prefix} | {run_part} | {cookie} | {web}"
+    return body, warn
+
+
+def _send_boot_summary(icon):
+    try:
+        body, warn = _boot_summary()
+    except Exception:
+        return
+    title = f"{APP_TITLE} ready"
+    try:
+        icon.notify(body, title)
+    except Exception:
+        pass
+    try:
+        from alerting import send_alert
+        send_alert(
+            "tray_boot",
+            title,
+            body,
+            level="warning" if warn else "info",
+        )
+    except Exception:
+        pass
+
+
 def main():
     global _runtime_monitor_only, _scheduler_detected
     _scheduler_detected = _detect_scheduler_tracker()
@@ -603,6 +656,7 @@ def main():
         _start_tracker()
     if TRAY_WEB_AUTO_START and WEB_ENABLED and not _detect_web_service():
         _start_web()
+    threading.Timer(2.0, _send_boot_summary, args=(icon,)).start()
     icon.run()
 
 

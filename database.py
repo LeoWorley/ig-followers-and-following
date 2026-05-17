@@ -202,5 +202,42 @@ class Database:
         self.session.commit()
         return entry
 
+    def get_changes_for_run(self, target_id, run_started_at):
+        base = self.session.query(FollowerFollowing).filter_by(target_id=target_id)
+        new_followers = [
+            r.follower_following_username
+            for r in base.filter(
+                FollowerFollowing.is_follower == True,
+                FollowerFollowing.first_seen_run_at == run_started_at,
+            ).all()
+        ]
+        lost_followers = [
+            r.follower_following_username
+            for r in base.filter(
+                FollowerFollowing.is_follower == True,
+                FollowerFollowing.lost_at_run_at == run_started_at,
+            ).all()
+        ]
+        new_followings = [
+            r.follower_following_username
+            for r in base.filter(
+                FollowerFollowing.is_follower == False,
+                FollowerFollowing.first_seen_run_at == run_started_at,
+            ).all()
+        ]
+        lost_followings = [
+            r.follower_following_username
+            for r in base.filter(
+                FollowerFollowing.is_follower == False,
+                FollowerFollowing.lost_at_run_at == run_started_at,
+            ).all()
+        ]
+        return {
+            "new_followers": new_followers,
+            "lost_followers": lost_followers,
+            "new_followings": new_followings,
+            "lost_followings": lost_followings,
+        }
+
     def close(self):
         self.session.close()

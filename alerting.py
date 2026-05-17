@@ -79,6 +79,30 @@ def _send_webhook(title, message, level):
         resp.read()
 
 
+def _send_ntfy(title, message, level):
+    ntfy_url = os.getenv("NTFY_URL", "").strip()
+    if not ntfy_url:
+        return
+    priority_map = {"info": "3", "warning": "4", "error": "5", "critical": "5"}
+    priority = priority_map.get(level, "3")
+    headers = {
+        "Title": title,
+        "Priority": priority,
+        "Content-Type": "text/plain",
+    }
+    token = os.getenv("NTFY_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = request.Request(
+        ntfy_url,
+        data=message.encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with request.urlopen(req, timeout=10) as resp:
+        resp.read()
+
+
 def _send_desktop(title, message):
     try:
         if sys.platform.startswith("win"):
@@ -134,3 +158,9 @@ def send_alert(event_key, title, message, level="error"):
 
     if "desktop" in channels:
         _send_desktop(title, message)
+
+    if "ntfy" in channels:
+        try:
+            _send_ntfy(title, message, level)
+        except Exception:
+            logging.exception("ntfy alert failed")
