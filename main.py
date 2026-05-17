@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import json
 import random
@@ -73,6 +74,25 @@ def setup_logging():
 
 def random_sleep(min_seconds=2, max_seconds=5):
     time.sleep(random.uniform(min_seconds, max_seconds))
+
+_COUNT_RE = re.compile(r"[\d][\d.,]*")
+
+def _extract_count_from_link(link_element):
+    candidates = [
+        link_element.get_attribute("title"),
+        link_element.get_attribute("aria-label"),
+        link_element.text,
+    ]
+    for raw in candidates:
+        if not raw:
+            continue
+        m = _COUNT_RE.search(raw)
+        if not m:
+            continue
+        digits = m.group(0).replace(",", "").replace(".", "")
+        if digits.isdigit():
+            return int(digits)
+    return None
 
 def random_scroll():
     return random.uniform(0.3, 0.7)
@@ -505,14 +525,15 @@ class InstagramTracker:
                 EC.presence_of_element_located((By.CSS_SELECTOR, 'a[href*="/followers/"]'))
             )
             
-            # Get the followers count from the span with title attribute
-            followers_count_elem = followers_link.find_element(By.CSS_SELECTOR, 'span[class*="x5n08af"] span')
-            followers_count = int(followers_count_elem.text.replace(',', ''))
-            print(f"Found {followers_count} followers")
+            # Get the followers count from the link (title/aria-label/text — IG class names rotate)
+            followers_count = _extract_count_from_link(followers_link)
+            if followers_count is None:
+                print("Warning: could not parse followers count from link; will still try to open modal.")
+            else:
+                print(f"Found {followers_count} followers")
 
-            # Get the target object
             # Store the followers count in the database
-            if target:
+            if target and followers_count is not None:
                 self.db.add_count(
                     target_id=target.id,
                     count_type='followers',
@@ -556,7 +577,7 @@ class InstagramTracker:
                         print(f"Successfully scraped {len(followers_list)} followers")
                     else:
                         print("Warning: No followers were scraped")
-                        if followers_count > 0:
+                        if followers_count and followers_count > 0:
                             print("Retrying followers scrape once...")
                             followers_list = store_followers(
                                 self.driver,
@@ -595,13 +616,14 @@ class InstagramTracker:
                 EC.presence_of_element_located((By.CSS_SELECTOR, 'a[href*="/following/"]'))
             )
 
-            # Get the followings count from the span
-            followings_count_elem = followings_link.find_element(By.CSS_SELECTOR, 'span span')
-            followings_count = int(followings_count_elem.text.replace(',', ''))
-            print(f"Found {followings_count} followings")
+            # Get the followings count from the link (title/aria-label/text — IG class names rotate)
+            followings_count = _extract_count_from_link(followings_link)
+            if followings_count is None:
+                print("Warning: could not parse followings count from link; will still try to open modal.")
+            else:
+                print(f"Found {followings_count} followings")
 
-            # Get the target object
-            if target:
+            if target and followings_count is not None:
                 self.db.add_count(
                     target_id=target.id,
                     count_type='followings',
@@ -652,7 +674,7 @@ class InstagramTracker:
                         print(f"Successfully scraped {len(current_followings_list)} followings")
                     else:
                         print("Warning: No followings were scraped")
-                        if followings_count > 0:
+                        if followings_count and followings_count > 0:
                             print("Retrying followings scrape once...")
                             current_followings_list = store_followers(
                                 self.driver,

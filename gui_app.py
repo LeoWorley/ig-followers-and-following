@@ -55,6 +55,11 @@ _process = None
 _log_handle = None
 
 
+def _tray_startup_shortcut_path() -> Path:
+    appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+    return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "IG Tracker Tray.lnk"
+
+
 def _nssm_path():
     local = ROOT_DIR / "nssm.exe"
     if local.exists():
@@ -652,6 +657,9 @@ class TrackerGUI:
         self.web_svc_stop_btn = None
         self.web_svc_restart_btn = None
         self.web_svc_remove_btn = None
+        self.tray_startup_var = tk.StringVar(value="Checking...")
+        self.tray_startup_enable_btn = None
+        self.tray_startup_disable_btn = None
 
         self.available_dates = []
         self.available_targets = []
@@ -936,8 +944,18 @@ class TrackerGUI:
         self.web_svc_remove_btn = ttk.Button(web_row, text="Uninstall", command=self._remove_web_svc_clicked)
         self.web_svc_remove_btn.grid(row=0, column=6, padx=2)
 
+        if os.name == "nt":
+            tray_row = ttk.Frame(svc_frame)
+            tray_row.grid(row=3, column=0, columnspan=2, sticky="ew", padx=6, pady=2)
+            ttk.Label(tray_row, text="Tray at login:", width=16).grid(row=0, column=0, sticky="w", padx=(0, 6))
+            ttk.Label(tray_row, textvariable=self.tray_startup_var, width=14).grid(row=0, column=1, sticky="w")
+            self.tray_startup_enable_btn = ttk.Button(tray_row, text="Enable at login", command=self._enable_tray_startup_clicked)
+            self.tray_startup_enable_btn.grid(row=0, column=2, padx=2)
+            self.tray_startup_disable_btn = ttk.Button(tray_row, text="Disable at login", command=self._disable_tray_startup_clicked)
+            self.tray_startup_disable_btn.grid(row=0, column=3, padx=2)
+
         bottom = ttk.Frame(svc_frame)
-        bottom.grid(row=3, column=0, columnspan=2, sticky="ew", padx=6, pady=(4, 6))
+        bottom.grid(row=4, column=0, columnspan=2, sticky="ew", padx=6, pady=(4, 6))
         ttk.Button(bottom, text="Refresh status", command=self._refresh_services_status).grid(row=0, column=0, padx=(0, 12))
         ttk.Label(bottom, text="Install / Uninstall will show a Windows administrator (UAC) prompt.", foreground="#666").grid(row=0, column=1, sticky="w")
 
@@ -983,6 +1001,33 @@ class TrackerGUI:
         self.web_svc_stop_btn.configure(state=_s(web_status == "running"))
         self.web_svc_restart_btn.configure(state=_s(web_status == "running"))
         self.web_svc_remove_btn.configure(state=_s(nssm_ok and web_installed))
+
+        if self.tray_startup_enable_btn is not None:
+            enabled = _tray_startup_shortcut_path().exists()
+            self.tray_startup_var.set("Enabled" if enabled else "Disabled")
+            self.tray_startup_enable_btn.configure(state=_s(not enabled))
+            self.tray_startup_disable_btn.configure(state=_s(enabled))
+
+    def _enable_tray_startup_clicked(self):
+        self._run_tray_startup_script(remove=False)
+
+    def _disable_tray_startup_clicked(self):
+        self._run_tray_startup_script(remove=True)
+
+    def _run_tray_startup_script(self, remove: bool):
+        script = ROOT_DIR / "register_tray_startup.ps1"
+        if not script.exists():
+            self._set_message(f"Missing {script.name}")
+            return
+        args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)]
+        if remove:
+            args.append("-Remove")
+        try:
+            subprocess.run(args, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            self._set_message("Tray-at-login " + ("disabled." if remove else "enabled."))
+        except Exception as exc:
+            self._set_message(f"Tray-at-login update failed: {exc}")
+        self._refresh_services_status()
 
     def _browse_nssm_clicked(self):
         import shutil

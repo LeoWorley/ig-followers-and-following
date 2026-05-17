@@ -227,9 +227,11 @@ Small monitor/controller with report shortcuts.
 - Auto monitor mode on Windows when Task Scheduler is detected:
   - `TRAY_AUTO_MONITOR_ON_SCHEDULER=true`
 - Tray menu includes "Open GUI" for full report and DB tools access.
-- Optional Windows startup shortcut:
+- Optional Windows startup shortcut (hidden, tray icon only):
   - install: `.\register_tray_startup.ps1`
   - remove: `.\register_tray_startup.ps1 -Remove`
+  - opt in during setup: `.\setup.ps1 -RegisterTrayStartup` (or answer Yes to the prompt)
+  - toggle from the GUI: Services section → "Tray at login" Enable / Disable buttons
 
 ## Mobile Web Dashboard (`web_app.py`)
 

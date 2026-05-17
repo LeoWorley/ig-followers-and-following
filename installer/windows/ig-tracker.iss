@@ -25,7 +25,7 @@ UninstallDisplayIcon={app}\ig-tracker-gui.exe
 
 [Tasks]
 Name: "bgtracking"; Description: "Offer background tracking setup after first login"; GroupDescription: "Setup options:"; Flags: checkedonce
-Name: "traystartup"; Description: "Run tray monitor at Windows startup"; GroupDescription: "Setup options:"
+Name: "traystartup"; Description: "Run tray monitor at Windows login (hidden, tray icon only)"; GroupDescription: "Setup options:"
 
 [Files]
 Source: "{#SourceDir}\ig-tracker-gui.exe"; DestDir: "{app}"; Flags: ignoreversion

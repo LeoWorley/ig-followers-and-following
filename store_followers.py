@@ -152,12 +152,19 @@ def store_followers(
             item_elements = driver.find_elements(By.CSS_SELECTOR, f'div[role="dialog"] a[role="link"]')
             print(f"Found {len(item_elements)} elements in current view")
             
+            reserved_segments = {"followers", "following", "followers_you_follow"}
+            target_username = (target.username or "").lower()
             for element in item_elements:
+                username = None
                 try:
                     href = element.get_attribute('href')
                     if href and '/' in href:
-                        username = href.split('/')[-2]
-                    if username and username != '':
+                        path = href.split('?', 1)[0].rstrip('/')
+                        last = path.rsplit('/', 1)[-1].lower()
+                        if last in reserved_segments:
+                            continue
+                        username = path.rsplit('/', 1)[-1]
+                    if username and username.lower() not in reserved_segments and username.lower() != target_username:
                         current_items.add(username)
                 except Exception as e:
                     print(f"Error processing element: {e}")

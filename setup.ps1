@@ -1,6 +1,7 @@
 param(
     [switch]$SkipInstall,
-    [switch]$RunLoginOnly
+    [switch]$RunLoginOnly,
+    [switch]$RegisterTrayStartup
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,9 +51,20 @@ if ($RunLoginOnly) {
     & $venvPython (Join-Path $root "main.py")
 }
 
+$registerScript = Join-Path $root "register_tray_startup.ps1"
+$wantTrayStartup = $RegisterTrayStartup.IsPresent
+if (-not $wantTrayStartup -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    $answer = Read-Host "Launch the tray monitor automatically at Windows login (hidden, tray icon only)? [y/N]"
+    if ($answer -match '^[Yy]') { $wantTrayStartup = $true }
+}
+if ($wantTrayStartup -and (Test-Path $registerScript)) {
+    & $registerScript
+}
+
 Write-Host ""
 Write-Host "Setup complete."
 Write-Host "Next steps:"
 Write-Host "1) Edit .env with IG_USERNAME / IG_PASSWORD / TARGET_ACCOUNT"
 Write-Host "2) First login: .\venv\Scripts\python.exe main.py (with LOGIN_ONLY_MODE=true, HEADLESS_MODE=false)"
 Write-Host "3) Start GUI: .\start_gui.ps1"
+Write-Host "Tip: toggle tray-at-login later with .\register_tray_startup.ps1 (-Remove to undo)."
